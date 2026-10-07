@@ -409,3 +409,7 @@ details.admin[open] > summary::before { content: '▾ '; }
 details.admin[open] > summary { border-bottom: 1px solid var(--line); color: var(--ink); }
 .danger-zone { border: 1px solid #f1b5b5; background: #fff8f8; border-radius: 8px; padding: 14px 16px; }
 .danger-zone h3 { margin: 0 0 4px; font-size: 14px; color: var(--bad); }
+
+/* ---------- Hosted demo note ---------- */
+.demo-banner { display: flex; align-items: center; gap: 14px; padding: 9px 28px; background: var(--shop-soft); color: #173f73; border-bottom: 1px solid #c9dcf5; font-size: 13px; line-height: 1.45; }
+.demo-banner .btn { flex-shrink: 0; margin-left: auto; }

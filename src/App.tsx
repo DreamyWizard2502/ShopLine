@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { HashRouter, NavLink, Route, Routes, useNavigate, Link } from 'react-router-dom'
 import { StoreProvider, useStore } from './lib/store'
 import { Icon } from './components/ui'
@@ -14,6 +14,19 @@ import SettingsPage from './pages/Settings'
 import Wholegoods from './pages/Wholegoods'
 import ImportPage from './pages/Import'
 import { OverrideHost, requestOverride } from './components/override'
+
+// Shown only on the hosted demo (GitHub Pages) so first-time visitors know what they're looking at.
+const IS_DEMO = typeof location !== 'undefined' && location.hostname.endsWith('github.io')
+function DemoBanner() {
+  const [open, setOpen] = useState(() => { try { return localStorage.getItem('shopline.demoNote') !== 'off' } catch { return true } })
+  if (!IS_DEMO || !open) return null
+  return (
+    <div className="demo-banner no-print">
+      <span><b>Live demo.</b> Everything here is sample data, and anything you change stays in your own browser. Master override PIN is <span className="mono">0000</span>. Start over anytime from Settings → Admin tools → Reset to demo data.</span>
+      <button className="btn sm" onClick={() => { setOpen(false); try { localStorage.setItem('shopline.demoNote', 'off') } catch { /* ignore */ } }}>Got it</button>
+    </div>
+  )
+}
 
 function Shell({ children }: { children: React.ReactNode }) {
   const { db, setCurrentUser, override, disableOverride } = useStore()
@@ -71,7 +84,7 @@ function Shell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </aside>
-      <main className="main"><OverrideHost />{children}</main>
+      <main className="main"><DemoBanner /><OverrideHost />{children}</main>
     </div>
   )
 }

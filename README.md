@@ -1,5 +1,7 @@
 # ShopLine
 
+**Live demo:** https://dreamywizard2502.github.io/ShopLine/ (sample data only; changes stay in your browser; master override PIN `0000`)
+
 **Dealer management for small-engine and outdoor power equipment shops: repair orders, wholegoods, and parts inventory.**
 
 ShopLine is a dealer management system rebuilt from scratch as a fast, keyboard-friendly web app. I've worked the counter and the bench at a lawn equipment shop. The dealer software we used could do the job, but it hid the most important question: *which jobs are stuck, and why?* ShopLine is built around answering that question.
