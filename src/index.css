@@ -615,3 +615,5 @@ details.admin[open] > summary { border-bottom: 1px solid var(--line); color: var
 .h-cur { background: #8fb3e0; } .h-31 { background: #e0b25c; } .h-61 { background: #d9772e; } .h-91 { background: #b42318; }
 .h-key { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 .h-detail > td { background: var(--panel-2); padding: 8px 16px 14px; }
+.ar-empty { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; background: var(--accent-soft); border: 1px solid #f6c7ad; border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; font-size: 13px; }
+.ar-empty > div:first-child { flex: 1 1 420px; }

@@ -7,7 +7,8 @@ import {
 } from '../lib/ar'
 import { fmtDate, money, round2 } from '../lib/calc'
 import { Icon, Modal } from '../components/ui'
-import { OverrideButton } from '../components/override'
+import { OverrideButton, requestOverride } from '../components/override'
+import { download } from '../lib/importer'
 import { CustomerSearchPick } from '../components/custpick'
 
 const parseAmt = (s: string) => Number(s.replace(/[$,\s]/g, '')) || 0
@@ -29,6 +30,7 @@ type Sort = 'balance' | 'pastdue' | 'oldest' | 'name'
 
 export default function ArOverview() {
   const { db } = useStore()
+  const [loadSample, setLoadSample] = useState(false)
   const nav = useNavigate()
   const [q, setQ] = useState('')
   const [only, setOnly] = useState<'all' | 'pastdue' | 'over' | 'credit' | 'held'>('all')
@@ -71,6 +73,18 @@ export default function ArOverview() {
         <button className="btn primary" onClick={() => setModal('payment')}>{Icon.plus} Record payment</button>
       </div>
       <ArTabs />
+      {db.ar.length === 0 && (
+        <div className="ar-empty">
+          <div>
+            <b>No A/R in this browser yet.</b> This browser’s data was saved before A/R existed, so it has no charges, payments, statements or history.
+            To try everything with sample accounts, load the sample shop. That replaces what’s saved in this browser. Or start real A/R by posting an opening balance.
+          </div>
+          <div className="row wrap" style={{ gap: 8 }}>
+            <button className="btn primary" onClick={() => setLoadSample(true)}>Load the sample shop…</button>
+            <button className="btn" onClick={() => setModal('charge')}>Post an opening balance</button>
+          </div>
+        </div>
+      )}
 
       <div className="ar-tiles">
         <Tile label="Open invoices" value={tot.aging.Current + tot.aging['31–60'] + tot.aging['61–90'] + tot.aging['Over 90']} strong />
@@ -115,7 +129,31 @@ export default function ArOverview() {
       </div>
 
       {modal && <EntryModal kind={modal} onClose={() => setModal(null)} />}
+      {loadSample && <LoadSampleModal onClose={() => setLoadSample(false)} />}
     </div>
+  )
+}
+
+/** Replace this browser's data with the sample shop (same as Settings → Reset to demo data). */
+function LoadSampleModal({ onClose }: { onClose: () => void }) {
+  const { db, resetDemo, override, audit } = useStore()
+  const [backedUp, setBackedUp] = useState(false)
+  return (
+    <Modal title="Load the sample shop?" onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn danger" onClick={() => {
+          if (!override) { requestOverride(); return }
+          audit('Replaced browser data with the sample shop (from A/R)')
+          resetDemo(); onClose()
+        }}>{!override && '🔒 '}Erase and load sample shop</button></>}>
+      <div className="stack">
+        <p style={{ margin: 0 }}>This erases everything saved in this browser ({db.customers.length} customers, {db.ros.length} repair orders, {db.parts.length.toLocaleString()} parts) and loads the sample shop with a full A/R book: charge accounts, past-due and over-limit customers, deposits, statements and six months of history.</p>
+        <p className="small muted" style={{ margin: 0 }}>If you imported real customers or price files here, download a backup first. You can restore it in Settings → Backup.</p>
+        <div><button className="btn" onClick={() => { download(`shopline-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(db), 'application/json'); setBackedUp(true) }}>
+          {backedUp ? '✓ Backup downloaded' : 'Download backup first'}</button></div>
+        {!override && <div className="small muted">Needs master override (demo PIN 0000).</div>}
+      </div>
+    </Modal>
   )
 }
 
