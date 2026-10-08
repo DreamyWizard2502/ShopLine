@@ -114,6 +114,41 @@ src/
 - Look-up banner: **Review and merge** (defaults to keeping the record with more history) or **Not a duplicate** (stored in `db.notDuplicates`; "Clear marks" in Settings).
 - Merge screen (`/customers/merge?keep=&remove=`, also "Merge…" on any customer record): pick or swap the two records, choose field by field (only differing fields shown), see what moves. `lib/merge.ts` moves units, ROs, sold wholegoods and A/R entries, fills empty phone slots with the other's numbers (leftovers go to notes), keeps both notes and the earlier customer-since date, records `mergedFrom`, removes the old record, and writes the audit log. Searching the old number still finds the survivor. Needs master override by default (toggle in Settings, only changeable with override on).
 
+## Scope: quick tickets, customer depth, order history & archive (agreed to scope 2026-10-08, NOT built yet)
+
+Why: Rod's counter work is mostly high-volume, low-ticket jobs (chain sharpen, blade sharpen, flat tires) that today need the full repair-order form, and there is no way to clear out forgotten ROs without opening them one by one.
+
+### 1. Quick tickets (job-type menu on "New ticket")
+- "New ticket" opens a menu of big tiles instead of going straight to the repair-order form: **Repair order**, **Estimate**, **Chain**, **Blade**, **Tire/flat**. Job types are editable in Settings (`Settings.jobTypes`), so Rod can add Tune-up, Pressure-wash, and so on without code.
+- A job type is `{ code, name, icon, unitRequired, fields[], presets[], promiseHours, skipDiagnose }`. `fields` are small typed inputs (text / number / pick-list / yes-no); `presets` are labor/part/fee lines with a flat price and a quantity.
+- Data: `RepairOrder.kind` (job-type code; `'repair'` for everything existing) and `RepairOrder.jobFields: Record<string, string | number | boolean>`. Printed on the shop ticket and invoice.
+- Fast path: customer (defaults to Cash Customer #1000) → job type → fields and quantity → done. **A unit record is optional** on quick tickets (a plain "Stihl MS 271, 20 in bar" note is enough); a unit is still required for `repair`.
+- Suggested starting fields:
+  - Chain: bar length, pitch / gauge / drive links, quantity, action (sharpen / replace / new chain).
+  - Blade: quantity, blade length or deck size, action (sharpen + balance / replace), type (standard / mulching / hi-lift).
+  - Tire: position, tire size, tubed or tubeless, action (plug-patch / tube / remount / new tire / sealant), on-unit or wheel only.
+- Quick tickets skip diagnose / awaiting-OK by default (Checked in → Ready → Closed) and take a promise **time**, not just a date ("while you wait", "end of day"). The work-in-progress page gets a job-type filter.
+
+### 2. Customer record depth
+- Tabs on the customer: Overview · Contacts · Ship-To · Units · Open orders · Invoice history · Notes · Documents · Account (A/R, exists).
+- New types: `Contact { id, name, type, phone, cell, email, primary, canApprove }`, `ShipTo { id, label, address…, default }`, `Note { id, at, user, kind, text, pinned, roId? }`. Notes become a log (newest first, pin, link to an RO).
+- **Migration v6** moves `contact1/contact2` into `contacts` and the old notes string into the first `Note`. Keep the legacy fields readable until the importer is updated. `buildIndex` in `customerSearch.ts` must search contacts and notes after this.
+- Unit fields (Phase 2): warranty, ESP, purchase date, color, bin, engine #, VIN, tag.
+
+### 3. Orders list, invoice history and archive
+- One shared `OrderTable` component, used two ways: a global **Orders** page (tabs Open · Forgotten · Closed · Archived) and the customer's Open orders / Invoice history tabs (same table, filtered to the customer).
+- Invoice history filters: date range, unit, job type, warranty, amount range, free text (complaint, part number, serial). Row actions: reprint, **copy to a new RO** (repeat job). CSV export.
+- **Email-style selection**: checkbox per row, shift-click for a range, header checkbox for the page, then a "Select all N that match this filter" bar (Gmail style) so 200 forgotten orders is one click. A bulk bar appears with Archive, Change status, Reassign tech, Print list, Export.
+- **Forgotten queue**: smart view grouped by reason with counts, each group one click to select: no activity over `staleDays`; awaiting OK too long; waiting on parts over `partsWaitDays`; ready for pickup but not collected for N days; estimates never approved.
+- **Archive is not delete and not close.** Close = billed. Archive = hidden, no billing. `RepairOrder.archived?: { at, by, reason, note }`. Reasons: abandoned, estimate declined, no response, duplicate, done elsewhere, other. Archived orders disappear from the dashboard, work-in-progress and Open orders, but stay searchable under "Show archived" and can be restored one by one or in bulk.
+- Guard rails: an RO with A/R charges or a held deposit can't be archived until the money is dealt with; every batch writes one audit line (count and numbers) and shows an **Undo** toast; the app only ever *suggests* archiving, it never auto-archives.
+
+### Build order
+A. v6 migration (kind, jobFields, archived, contacts, shipTo, notes) → B. quick tickets and job-type settings → C. Orders page, selection, Forgotten queue, archive → D. customer tabs (contacts, ship-to, notes, open orders, invoice history) → E. unit fields.
+
+### Open questions for Rod
+1. Job types beyond chain / blade / tire? 2. Flat prices (per chain, per blade, per tire action)? 3. OK that quick tickets don't need a unit? 4. Should bulk-archiving over ~25 orders need the master PIN? 5. Do parts on an archived RO go back to stock? 6. How many days is "forgotten" for pickup-not-collected?
+
 ## Current status
 
 **Works** (committed, pushed, deployed):
