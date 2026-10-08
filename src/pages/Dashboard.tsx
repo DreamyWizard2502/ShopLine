@@ -16,7 +16,7 @@ export default function Dashboard() {
 
   const d = useMemo(() => {
     const rows = db.ros.map((ro) => ({ ro, t: roTotals(ro, s), flags: roFlags(ro, s) }))
-    const open = rows.filter((r) => r.ro.status !== 'closed')
+    const open = rows.filter((r) => r.ro.status !== 'closed' && !r.ro.archived)
     const closed30 = rows.filter((r) => r.ro.closedAt && daysBetween(r.ro.closedAt) <= 30)
     const sum = (xs: typeof rows) => xs.reduce((a, r) => a + r.t.total, 0)
 

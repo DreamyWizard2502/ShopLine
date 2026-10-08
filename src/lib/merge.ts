@@ -1,6 +1,7 @@
 // True customer merge: one record survives, the other's history moves onto it.
 import type { Customer, DB } from './types'
 import { customerPhones } from './calc'
+import { contactsOf, syncLegacyContacts } from './customerRecord'
 
 /** Fields the person chooses between, in the order they're shown. */
 export const MERGE_FIELDS = [
@@ -106,6 +107,16 @@ export function mergeCustomers(d: DB, keepId: string, otherId: string, picks: Pi
   if (extraNotes && !keep.notes.includes(extraNotes)) {
     keep.notes = [keep.notes.trim(), `From merged #${other.number}: ${extraNotes}`].filter(Boolean).join('\n')
   }
+  // 3b. Contacts, ship-to addresses and the notes log: keep everything from both (contacts de-duplicated by name)
+  if (keep.contacts || other.contacts) {
+    const mine = contactsOf(keep).map((x) => ({ ...x }))
+    const seen = new Set(mine.map((x) => x.name.trim().toLowerCase()))
+    for (const x of contactsOf(other)) if (x.name.trim() && !seen.has(x.name.trim().toLowerCase())) { mine.push({ ...x, primary: false }); seen.add(x.name.trim().toLowerCase()) }
+    keep.contacts = mine.map((x, i) => ({ ...x, id: x.id.startsWith('legacy-') ? `${keep.id}-ct${i}` : x.id }))
+    syncLegacyContacts(keep)
+  }
+  if (other.shipTos?.length) keep.shipTos = [...(keep.shipTos ?? []), ...other.shipTos.map((x) => ({ ...x, isDefault: x.isDefault && !keep.shipTos?.length }))]
+  if (other.noteLog?.length) keep.noteLog = [...(keep.noteLog ?? []), ...other.noteLog].sort((x, y) => y.at.localeCompare(x.at))
   if (other.createdAt < keep.createdAt) keep.createdAt = other.createdAt
   keep.mergedFrom = [...(keep.mergedFrom ?? []), ...(other.mergedFrom ?? []), { number: other.number, name: other.name, at, user }]
 

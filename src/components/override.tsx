@@ -31,6 +31,8 @@ export function OverrideHost() {
         </div>
       )}
       {open && (
+        // Wrapper keeps the PIN prompt above any other open dialog (e.g. a bulk archive asking for the PIN).
+        <div data-modal-top style={{ position: 'relative', zIndex: 200 }}>
         <Modal title="Master override" onClose={() => setOpen(false)}
           footer={<>
             <button className="btn" onClick={() => setOpen(false)}>Cancel</button>
@@ -47,6 +49,7 @@ export function OverrideHost() {
             {bad && <div className="flag" style={{ padding: '6px 10px' }}>Wrong PIN.</div>}
           </form>
         </Modal>
+        </div>
       )}
     </>
   )

@@ -25,7 +25,7 @@ export default function Parts() {
   // Units committed to open ROs, so "on hand" isn't the whole story.
   const committed = useMemo(() => {
     const m = new Map<string, number>()
-    for (const ro of db.ros) if (ro.status !== 'closed') for (const p of ro.parts) if (p.partId) m.set(p.partId, (m.get(p.partId) ?? 0) + p.qty)
+    for (const ro of db.ros) if (ro.status !== 'closed' && !ro.archived) for (const p of ro.parts) if (p.partId) m.set(p.partId, (m.get(p.partId) ?? 0) + p.qty)
     return m
   }, [db.ros])
 

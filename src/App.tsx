@@ -17,7 +17,9 @@ import MergeCustomers from './pages/MergeCustomers'
 import ArOverview, { ArAccount } from './pages/AR'
 import ArStatements, { StatementBatchPrint, StatementSinglePrint } from './pages/ARStatements'
 import ArHistory from './pages/ARHistory'
+import Orders from './pages/Orders'
 import { allAccounts } from './lib/ar'
+import { forgottenOf, isOpenRO } from './lib/orders'
 import { OverrideHost, requestOverride } from './components/override'
 
 // Shown only on the hosted demo (GitHub Pages) so first-time visitors know what they're looking at.
@@ -36,7 +38,8 @@ function DemoBanner() {
 function Shell({ children }: { children: React.ReactNode }) {
   const { db, setCurrentUser, override, disableOverride } = useStore()
   const nav = useNavigate()
-  const open = db.ros.filter((r) => r.status !== 'closed').length
+  const open = db.ros.filter(isOpenRO).length
+  const forgotten = useMemo(() => db.ros.filter((r) => forgottenOf(r, db.settings)).length, [db.ros, db.settings])
   const wgCount = db.wholegoods.filter((w) => w.status === 'in_stock' || w.status === 'demo').length
   const pastDue = useMemo(() => [...allAccounts(db).values()].filter((a) => a.pastDue > 0).length, [db])
 
@@ -65,7 +68,8 @@ function Shell({ children }: { children: React.ReactNode }) {
           <span><span className="brand-name">ShopLine</span><span className="brand-sub">Dealer System</span></span>
         </Link>
         <NavLink to="/" end className="nav-link">{Icon.wrench} Work in Progress <span className="count">{open}</span></NavLink>
-        <NavLink to="/ro/new" className="nav-link">{Icon.plus} New Repair Order</NavLink>
+        <NavLink to="/ro/new" className="nav-link">{Icon.plus} New Ticket</NavLink>
+        <NavLink to="/orders" className="nav-link">{Icon.list} Orders &amp; History {forgotten > 0 && <span className="count" title="Forgotten orders">{forgotten}</span>}</NavLink>
         <NavLink to="/dashboard" className="nav-link">{Icon.chart} Shop Dashboard</NavLink>
         <div className="nav-section">Inventory</div>
         <NavLink to="/wholegoods" className="nav-link">{Icon.mower} Wholegoods <span className="count">{wgCount}</span></NavLink>
@@ -86,7 +90,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             {override ? '🔓 Override ON · turn off' : '🔒 Master override'}
           </button>
           <div style={{ marginTop: 12, lineHeight: 1.9 }}>
-            <span className="kbd">N</span> new RO &nbsp; <span className="kbd">/</span> search<br />
+            <span className="kbd">N</span> new ticket &nbsp; <span className="kbd">/</span> search<br />
             <span className="kbd">D</span> dashboard
           </div>
         </div>
@@ -110,6 +114,7 @@ export default function App() {
                 <Route path="/" element={<WorkInProgress />} />
                 <Route path="/ro/new" element={<NewRO />} />
                 <Route path="/ro/:id" element={<RODetail />} />
+                <Route path="/orders" element={<Orders />} />
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/customers" element={<Customers />} />
                 <Route path="/customers/merge" element={<MergeCustomers />} />

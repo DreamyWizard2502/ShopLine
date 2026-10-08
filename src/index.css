@@ -617,3 +617,67 @@ details.admin[open] > summary { border-bottom: 1px solid var(--line); color: var
 .h-detail > td { background: var(--panel-2); padding: 8px 16px 14px; }
 .ar-empty { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; background: var(--accent-soft); border: 1px solid #f6c7ad; border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; font-size: 13px; }
 .ar-empty > div:first-child { flex: 1 1 420px; }
+
+/* ---------- New ticket menu & quick tickets ---------- */
+.tk-menu { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.tk-tile {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; text-align: left;
+  padding: 18px 16px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); cursor: pointer;
+  transition: border-color .12s, transform .12s;
+}
+.tk-tile:hover, .tk-tile:focus-visible { border-color: var(--accent); outline: none; transform: translateY(-1px); }
+.tk-tile.tk-main .tk-ico { background: var(--ink); color: #fff; }
+.tk-name { font-size: 17px; font-weight: 600; }
+.tk-sub { font-size: 12px; color: var(--ink-3); line-height: 1.35; }
+.tk-key { position: absolute; top: 10px; right: 10px; }
+.tk-ico { display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); flex: none; }
+.tk-ico.sm { width: 32px; height: 32px; border-radius: 8px; }
+.tk-grid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; align-items: start; }
+.tk-rail { position: sticky; top: 12px; }
+.tk-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.tk-opts { display: flex; flex-wrap: wrap; gap: 4px; }
+.tk-opts .chip { padding: 4px 9px; }
+.tk-services { display: flex; flex-direction: column; }
+.tk-svc { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+.tk-svc.on { background: var(--accent-soft); }
+.tk-step { display: flex; align-items: center; gap: 4px; }
+.tk-step .btn { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; font-size: 18px; line-height: 1; }
+.tk-step .input { width: 52px; text-align: center; padding: 6px 4px; }
+.tk-amt { width: 76px; font-weight: 600; }
+@media (max-width: 900px) { .tk-grid { grid-template-columns: 1fr; } .tk-rail { position: static; } }
+@media (max-width: 520px) { .tk-svc { flex-wrap: wrap; } .tk-amt { width: auto; } }
+
+/* ---------- Orders browser ---------- */
+.ob-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line-2); margin-bottom: 12px; overflow-x: auto; }
+.ob-tabs button { border: 0; background: none; padding: 8px 14px; cursor: pointer; font-weight: 500; color: var(--ink-2); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+.ob-tabs button.on { color: var(--ink); border-bottom-color: var(--accent); }
+.ob-tabs .n { font: 500 11px var(--mono); color: var(--ink-3); margin-left: 3px; }
+.ob-filters { gap: 8px; margin-bottom: 10px; }
+.ob-filters .select { width: auto; max-width: 220px; }
+.ob-filters .input[type=date] { width: 140px; }
+.ob-cb { width: 34px; text-align: center; cursor: default; }
+.ob-cb input { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); }
+.ob-table tr.ob-on td { background: #fff4ec; }
+.ob-group td { font-weight: 600; }
+.ob-kind { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 0 6px; border-radius: 99px; background: var(--accent-soft); color: #9a3412; font-size: 11px; font-weight: 600; vertical-align: 1px; }
+.ob-selall { padding: 8px 12px; margin-bottom: 8px; background: var(--shop-soft); border-radius: 6px; font-size: 13px; text-align: center; }
+.linkish { border: 0; background: none; padding: 0; color: var(--shop); font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.ob-bulk {
+  position: sticky; bottom: 12px; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px;
+  padding: 10px 14px; background: var(--ink); color: #fff; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.25);
+}
+.ob-bulk .btn:not(.primary) { background: #2c2f35; color: #fff; border-color: #44474e; }
+.ob-bulk .select { background: #2c2f35; color: #fff; border-color: #44474e; padding: 3px 6px; font-size: 12px; width: auto; }
+.ob-undo { display: flex; align-items: center; gap: 12px; }
+.ob-undo .btn { background: #fff; color: var(--ink); }
+
+/* ---------- Customer record tabs ---------- */
+.cr-tabs { margin-top: 4px; }
+.cr-list { display: flex; flex-direction: column; gap: 10px; }
+.cr-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--panel); }
+.cr-card.primary { border-color: var(--accent); }
+.cr-card .grid3, .cr-card .grid2 { gap: 8px; }
+.cr-note { border-left: 3px solid var(--line-2); padding: 6px 0 6px 12px; }
+.cr-note.pinned { border-left-color: var(--accent); background: #fffaf6; }
+.cr-note .meta { font-size: 12px; color: var(--ink-3); }
+.cr-unit-extra { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 12px; font-size: 12px; color: var(--ink-2); margin-top: 4px; }

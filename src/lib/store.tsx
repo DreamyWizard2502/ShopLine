@@ -8,6 +8,7 @@ import { makeSeed, DB_VERSION, defaultLines, defaultSettings } from './seed'
 import { STATUS_LABEL, uid } from './calc'
 import { idbGet, idbSet } from './idb'
 import { ensureCashCustomer } from './customerSearch'
+import { DEFAULT_JOB_TYPES } from './jobs'
 
 const IDB_KEY = 'db'
 const LEGACY_LS_KEY = 'shopline.db.v1'
@@ -53,6 +54,13 @@ function migrate(raw: DB): DB {
     db.arHistory ??= []
     db.version = 5
   }
+  if (db.version < 6) {
+    // v6: quick tickets (job types), archive, customer contacts / ship-to / notes log, unit detail.
+    // Every new field on old records is optional, so only settings need defaults.
+    db.settings = { ...defaultSettings, ...db.settings }
+    db.settings.jobTypes = structuredClone(db.settings.jobTypes?.length ? db.settings.jobTypes : DEFAULT_JOB_TYPES)
+    db.version = 6
+  }
   return db
 }
 
@@ -81,7 +89,10 @@ interface StoreApi {
   disableOverride: () => void
   audit: (action: string) => void
   // RO helpers
-  createRO: (input: Omit<RepairOrder, 'id' | 'number' | 'openedAt' | 'updatedAt' | 'closedAt' | 'timeline' | 'labor' | 'parts' | 'fees' | 'approvals'>) => RepairOrder
+  createRO: (input: Omit<RepairOrder, 'id' | 'number' | 'openedAt' | 'updatedAt' | 'closedAt' | 'timeline' | 'labor' | 'parts' | 'fees' | 'approvals'>,
+    lines?: Partial<Pick<RepairOrder, 'labor' | 'parts' | 'fees' | 'approvals'>>, createdText?: string) => RepairOrder
+  /** Start a new order from an old one: same customer, unit, job and lines at today's prices. */
+  repeatRO: (srcId: string) => RepairOrder | null
   updateRO: (id: string, fn: (ro: RepairOrder) => void, event?: { kind: TimelineEvent['kind']; text: string }) => void
   setStatus: (id: string, status: ROStatus) => void
   addNote: (id: string, text: string) => void
@@ -157,7 +168,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       disableOverride: () => { setOverride(false); audit('Master override turned off') },
       audit,
-      createRO: (input) => {
+      createRO: (input, lines, createdText) => {
         const ro: RepairOrder = {
           ...input,
           id: uid(),
@@ -165,8 +176,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           openedAt: now(),
           updatedAt: now(),
           closedAt: null,
-          labor: [], parts: [], fees: [], approvals: [],
-          timeline: [event('created', 'Repair order opened')],
+          labor: lines?.labor ?? [], parts: lines?.parts ?? [], fees: lines?.fees ?? [], approvals: lines?.approvals ?? [],
+          timeline: [event('created', createdText ?? 'Repair order opened')],
+        }
+        mutate((d) => { d.ros.push(ro); d.nextRONumber++ })
+        return ro
+      },
+      repeatRO: (srcId) => {
+        const src = db.ros.find((r) => r.id === srcId)
+        if (!src) return null
+        const price = new Map(db.parts.map((p) => [p.id, p]))
+                const fees = src.fees.filter((f) => f.description !== 'Shop supplies').map((f) => ({ ...f, id: uid() }))
+        const parts = src.parts.map((p) => {
+          const cat = p.partId ? price.get(p.partId) : undefined
+          return { ...p, id: uid(), unitPrice: cat?.price ?? p.unitPrice, status: (cat ? (cat.onHand > 0 ? 'in_stock' : 'ordered') : 'ordered') as typeof p.status }
+        })
+        const labor = src.labor.map((l) => ({ ...l, id: uid(), rate: db.settings.laborRate, techId: null }))
+        const ro: RepairOrder = {
+          id: uid(), number: db.nextRONumber, customerId: src.customerId, unitId: src.unitId, status: 'checked_in',
+          warranty: false, techId: null, openedAt: now(), updatedAt: now(), closedAt: null, promiseDate: null,
+          complaint: src.complaint, cause: '', correction: '', dropOffNotes: '',
+          checklist: { ...src.checklist }, labor, parts, fees, approvals: [],
+          timeline: [event('created', `Opened as a repeat of RO ${src.number}`)],
+          kind: src.kind, jobFields: src.jobFields ? { ...src.jobFields } : undefined, item: src.item, walkIn: src.walkIn ? { ...src.walkIn } : undefined,
         }
         mutate((d) => { d.ros.push(ro); d.nextRONumber++ })
         return ro

@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useStore } from '../lib/store'
 import { CUSTOMER_CATEGORIES, customerPhones } from '../lib/calc'
 import { accountFor } from '../lib/ar'
 import { AccountWarning } from './AR'
+import { QuickTicket, TicketMenu } from './QuickTicket'
 import type { Customer, Unit, UnitType, ROStatus } from '../lib/types'
 
 export const UNIT_TYPES: UnitType[] = ['Push Mower', 'Self-Propelled Mower', 'Zero-Turn Mower', 'Riding Mower', 'Chainsaw',
@@ -16,7 +17,19 @@ export function formatPhone(v: string) {
   return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`
 }
 
+/** "New ticket": a menu of job kinds, then either the full repair write-up or a quick ticket. */
 export default function NewRO() {
+  const { db } = useStore()
+  const [params] = useSearchParams()
+  const type = params.get('type')
+  const status = params.get('status')
+  if (!type && !status) return <TicketMenu />
+  const jt = type && type !== 'repair' ? db.settings.jobTypes.find((j) => j.code === type) : undefined
+  if (jt) return <QuickTicket key={jt.code} jt={jt} />
+  return <RepairWriteUp key={status ?? 'repair'} />
+}
+
+function RepairWriteUp() {
   const { db, createRO, createCustomer, createUnit, override, audit } = useStore()
   const nav = useNavigate()
   const [params] = useSearchParams()
@@ -76,7 +89,7 @@ export default function NewRO() {
   return (
     <div className="page" style={{ maxWidth: 980 }}>
       <div className="page-head">
-        <div><h1>New Repair Order</h1><div className="sub">RO #{db.nextRONumber} · write-up</div></div>
+        <div><div className="small muted"><Link to="/ro/new">New ticket</Link> / {status === 'estimate' ? 'Estimate' : 'Repair order'}</div><h1>{status === 'estimate' ? 'New Estimate' : 'New Repair Order'}</h1><div className="sub">RO #{db.nextRONumber} · write-up</div></div>
       </div>
 
       <div className="stack">

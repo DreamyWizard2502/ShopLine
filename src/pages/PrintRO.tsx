@@ -4,6 +4,7 @@ import { useLookups, useStore } from '../lib/store'
 import { APPROVAL_METHOD_LABEL, PART_STATUS_LABEL, STATUS_LABEL, customerPhones, fmtDate, fmtDateTime, money, roTotals } from '../lib/calc'
 import { Barcode } from '../components/barcode'
 import { roSettlement } from '../lib/ar'
+import { jobFieldsLine, jobTypeOf } from '../lib/jobs'
 
 /** One labelled value in the info strip. Empty values print a dash so the grid never collapses. */
 function Meta({ label, children, mono }: { label: string; children: React.ReactNode; mono?: boolean }) {
@@ -30,14 +31,17 @@ export default function PrintRO() {
   const ro = db.ros.find((r) => r.id === id)
   if (!ro) return <div className="page">Not found</div>
   const c = L.customer.get(ro.customerId)!
-  const u = L.unit.get(ro.unitId)!
+  const u = ro.unitId ? L.unit.get(ro.unitId) : undefined
+  const jt = jobTypeOf(db.settings, ro)
+  const details = jobFieldsLine(jt, ro.jobFields)
+  const phones = c.isCash && ro.walkIn?.phone ? [{ label: 'Phone', value: ro.walkIn.phone }] : customerPhones(c)
   const s = db.settings
   const t = roTotals(ro, s, !!c.taxExempt)
   const tech = ro.techId ? L.staff.get(ro.techId)?.name : ''
   const counter = ro.timeline.find((e) => e.kind === 'created')?.user ?? ''
   const isTicket = kind === 'ticket'
   const closed = ro.status === 'closed'
-  const title = isTicket ? 'Shop Ticket' : closed ? 'Invoice' : 'Repair Estimate'
+  const title = isTicket ? (jt ? `${jt.ticketName} ticket` : 'Shop Ticket') : closed ? 'Invoice' : jt ? 'Ticket' : 'Repair Estimate'
   const cityLine = [[c.city, c.state].filter(Boolean).join(', '), c.zip].filter(Boolean).join(' ')
   const taxPct = (s.taxRate * 100).toFixed(3).replace(/\.?0+$/, '')
   const subtotal = t.labor + t.parts + t.fees
@@ -80,7 +84,7 @@ export default function PrintRO() {
         <section className="inv-cards">
           <div className="inv-card">
             <div className="inv-label">Bill to</div>
-            <div className="inv-strong">{c.name}</div>
+            <div className="inv-strong">{c.isCash && ro.walkIn?.name ? ro.walkIn.name : c.name}</div>
             {c.contact1 && <div className="inv-dim">Attn: {[c.contact1, c.contact2].filter(Boolean).join(' / ')}</div>}
             {c.address && <div>{c.address}</div>}
             {c.address2 && <div>{c.address2}</div>}
@@ -89,21 +93,23 @@ export default function PrintRO() {
           <div className="inv-card">
             <div className="inv-label">Contact</div>
             <dl className="inv-dl">
-              {customerPhones(c).map((p) => <Fragment key={p.label}><dt>{p.label}</dt><dd>{p.value}</dd></Fragment>)}
-              {!customerPhones(c).length && <><dt>Phone</dt><dd>—</dd></>}
+              {phones.map((p) => <Fragment key={p.label}><dt>{p.label}</dt><dd>{p.value}</dd></Fragment>)}
+              {!phones.length && <><dt>Phone</dt><dd>—</dd></>}
               {c.email && <><dt>Email</dt><dd className="inv-break">{c.email}</dd></>}
               <dt>Tax</dt><dd>{c.taxExempt ? 'Exempt' : 'Taxable'}</dd>
               {c.category && <><dt>Type</dt><dd>{c.category}</dd></>}
             </dl>
           </div>
           <div className="inv-card inv-card-unit">
-            <div className="inv-label">Unit</div>
-            <div className="inv-strong">{u.make} {u.model}</div>
-            <div className="inv-dim">{u.type}</div>
-            <dl className="inv-dl" style={{ marginTop: 6 }}>
-              <dt>Serial</dt><dd className="mono">{u.serial || '—'}</dd>
-              {u.engineHours != null && <><dt>Hours</dt><dd>{u.engineHours}</dd></>}
-            </dl>
+            <div className="inv-label">{u ? 'Unit' : 'Item'}</div>
+            {u ? <>
+              <div className="inv-strong">{u.make} {u.model}</div>
+              <div className="inv-dim">{u.type}{u.color && ` · ${u.color}`}</div>
+              <dl className="inv-dl" style={{ marginTop: 6 }}>
+                <dt>Serial</dt><dd className="mono">{u.serial || '—'}</dd>
+                {u.engineHours != null && <><dt>Hours</dt><dd>{u.engineHours}</dd></>}
+              </dl>
+            </> : <div className="inv-strong">{ro.item || '—'}</div>}
           </div>
         </section>
 
@@ -111,7 +117,7 @@ export default function PrintRO() {
         <section className="inv-meta">
           <Meta label="Customer #" mono>{c.number}</Meta>
           <Meta label="Date in">{short(ro.openedAt)}</Meta>
-          <Meta label="Promised">{short(ro.promiseDate)}</Meta>
+          <Meta label="Promised">{short(ro.promiseDate)}{jt && ro.promiseDate && ` ${new Date(ro.promiseDate).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`}</Meta>
           <Meta label="Counter">{counter}</Meta>
           <Meta label="Salesman">{c.salesman}</Meta>
           <Meta label="Technician">{tech}</Meta>
@@ -125,8 +131,21 @@ export default function PrintRO() {
             <span className="inv-job-no">Service 1</span>
             <span className="inv-job-text">{ro.complaint || 'No complaint entered'}</span>
           </div>
+          {details && <div className="inv-note"><b>{jt!.name} details:</b> {details}</div>}
 
-          {isTicket ? (
+          {isTicket && jt ? (
+            <>
+              {ro.dropOffNotes && <div className="inv-note"><b>Notes:</b> {ro.dropOffNotes}</div>}
+              <table className="inv-lines inv-lines-ticket">
+                <thead><tr><th>Service</th><th className="r" style={{ width: 70 }}>Qty</th><th style={{ width: 120 }}>Done (initials)</th></tr></thead>
+                <tbody>
+                  {ro.fees.map((f) => <tr key={f.id}><td>{f.description}</td><td className="r">{f.qty ?? 1}</td><td /></tr>)}
+                  {ro.parts.map((p) => <tr key={p.id}><td>{p.description} <span className="mono inv-dim">{p.partNo}</span></td><td className="r">{p.qty}</td><td /></tr>)}
+                  {Array.from({ length: Math.max(0, 3 - ro.fees.length - ro.parts.length) }).map((_, i) => <tr key={i}><td /><td /><td /></tr>)}
+                </tbody>
+              </table>
+            </>
+          ) : isTicket ? (
             <>
               <div className="inv-check">
                 <span>{ro.checklist.hasFuel ? '☑' : '☐'} Has fuel</span>
@@ -177,9 +196,9 @@ export default function PrintRO() {
                     <tr key={p.id}><td>{p.description}</td><td className="mono">{p.partNo}</td>
                       <td className="r">{qtyFmt(p.qty)}</td><td className="r">{money(p.unitPrice)}</td><td className="r">{money(p.qty * p.unitPrice)}</td></tr>
                   ))}
-                  {ro.fees.length > 0 && <tr className="inv-group"><td colSpan={5}>Fees</td></tr>}
+                  {ro.fees.length > 0 && <tr className="inv-group"><td colSpan={5}>{jt ? 'Services' : 'Fees'}</td></tr>}
                   {ro.fees.map((f) => (
-                    <tr key={f.id}><td>{f.description}</td><td /><td className="r">1</td><td className="r">{money(f.amount)}</td><td className="r">{money(f.amount)}</td></tr>
+                    <tr key={f.id}><td>{f.description}</td><td /><td className="r">{f.qty ?? 1}</td><td className="r">{money(f.each ?? f.amount)}</td><td className="r">{money(f.amount)}</td></tr>
                   ))}
                   {!ro.labor.length && !ro.parts.length && !ro.fees.length && (
                     <tr><td colSpan={5} className="inv-dim" style={{ padding: '14px 8px' }}>No labor or parts on this order yet.</td></tr>

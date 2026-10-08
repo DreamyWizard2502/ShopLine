@@ -7,8 +7,10 @@ import type {
 import { STATUS_LABEL, STATUS_ORDER, round2, roTotals } from './calc'
 import { ensureCashCustomer } from './customerSearch'
 import { lastCycleClose, previousCycleClose, snapshotFor, statementCandidates } from './ar'
+import { DEFAULT_JOB_TYPES } from './jobs'
+import { seedV6 } from './seedV6'
 
-export const DB_VERSION = 5
+export const DB_VERSION = 6
 
 // Small deterministic PRNG so every reset gives the same shop.
 function mulberry32(seed: number) {
@@ -50,6 +52,11 @@ export const defaultSettings: Settings = {
   statementMinBalance: 1,
   arWarnAtWriteUp: true,
   arAckOverLimit: true,
+  jobTypes: DEFAULT_JOB_TYPES,
+  pickupForgottenDays: 30,
+  abandonedDays: 60,
+  estimateForgottenDays: 30,
+  archivePinOver: 25,
 }
 
 export const defaultLines: Line[] = [
@@ -242,7 +249,7 @@ export function makeSeed(now = Date.now()): DB {
   const id = (p: string) => `${p}-${(++idn).toString(36)}`
   const phone = () => `(405) 555-${String(int(1000, 9999))}`
 
-  const settings = { ...defaultSettings }
+  const settings = { ...defaultSettings, jobTypes: structuredClone(DEFAULT_JOB_TYPES) }
 
   // Parts
   const srpOf = (cost: number) => round2(Math.ceil(cost * 1.65 * 4) / 4 - 0.01) // ~65% markup, priced to .x9
@@ -624,6 +631,9 @@ export function makeSeed(now = Date.now()): DB {
     const closedAt = new Date(Math.min(now - 3_600_000, new Date(m.getFullYear(), m.getMonth() + 1, 2, 9).getTime())).toISOString()
     db.arHistory.push({ ...snapshotFor(db, period, 'Ben T.', closedAt), id: id('ah') })
   }
+  // v6 samples (quick tickets, forgotten + archived orders, contacts, ship-to, notes, unit detail).
+  // Separate random stream so everything above stays exactly the same.
+  seedV6(db, now)
   return db
 }
 

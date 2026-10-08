@@ -261,7 +261,7 @@ function Preview({ e, attn, dups, people, acct }: { e: CustEntry; attn: Attentio
         </div>
         <div className="lk-p-pills"><Pills c={c} attn={attn.filter((a) => a !== 'duplicate')} /></div>
         <div className="lk-p-actions">
-          <Link className="btn primary lk-big" to={`/ro/new?customer=${c.id}`}>{Icon.plus} New repair order</Link>
+          <Link className="btn primary lk-big" to={`/ro/new?customer=${c.id}`}>{Icon.plus} New ticket</Link>
           <Link className="btn lk-big" to={`/ro/new?customer=${c.id}&status=estimate`}>New estimate</Link>
         </div>
       </div>
@@ -300,7 +300,10 @@ function Preview({ e, attn, dups, people, acct }: { e: CustEntry; attn: Attentio
           <section>
             <h3>Contacts</h3>
             <dl className="lk-kv">
-              {e.contacts.map((n, i) => <div key={n + i}><dt>Contact {i + 1}</dt><dd>{n}</dd></div>)}
+              {e.people.filter((p) => p.name.trim()).map((p, i) => (
+                <div key={p.id + i}><dt>{p.type || `Contact ${i + 1}`}</dt><dd>{p.name}{p.canApprove && <span className="muted small"> · can approve</span>}
+                  {(p.cell || p.phone) && <> · <a className="mono" href={`tel:${(p.cell || p.phone).replace(/\D/g, '')}`}>{p.cell || p.phone}</a></>}</dd></div>
+              ))}
             </dl>
           </section>
         )}

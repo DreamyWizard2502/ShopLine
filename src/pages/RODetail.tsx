@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useLookups, useStore } from '../lib/store'
 import type { ApprovalMethod, Part, PartLineStatus, ROStatus, RepairOrder } from '../lib/types'
 import {
-  APPROVAL_METHOD_LABEL, PART_STATUS_LABEL, STATUS_LABEL, STATUS_ORDER, daysIdle, daysOpen, fmtDate, fmtDateTime,
+  APPROVAL_METHOD_LABEL, PART_STATUS_LABEL, STATUS_LABEL, daysIdle, daysOpen, fmtDate, fmtDateTime,
   customerPhones, money, roFlags, roTotals, round2, uid,
 } from '../lib/calc'
 import { Flags, Modal, StatusBadge } from '../components/ui'
@@ -11,6 +11,10 @@ import { DraftNumber, DraftText } from '../components/fields'
 import { normPartNo } from '../lib/importer'
 import { atFromDate, roBilling, roSettlement, todayYMD } from '../lib/ar'
 import { AccountWarning } from './AR'
+import { jobTypeOf, statusesFor } from '../lib/jobs'
+import { ARCHIVE_REASON_LABEL, archiveBlocker, restoreOrders } from '../lib/orders'
+import { ArchiveModal } from '../components/orders'
+import { JobGlyph } from '../components/ui'
 
 export default function RODetail() {
   const { id } = useParams()
@@ -23,19 +27,22 @@ export default function RODetail() {
   const [pendingStatus, setPendingStatus] = useState<ROStatus | null>(null)
   const [toast, setToast] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [archiving, setArchiving] = useState(false)
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(''), 2200); return () => clearTimeout(t) } }, [toast])
 
   if (!ro) return <div className="page"><h1>Repair order not found</h1><Link to="/">Back to Work in Progress</Link></div>
 
   const c = L.customer.get(ro.customerId)!
-  const u = L.unit.get(ro.unitId)!
+  const u = L.unit.get(ro.unitId)
+  const jt = jobTypeOf(db.settings, ro)
+  const pipeline = statusesFor(db.settings, ro)
   const s = db.settings
   const t = roTotals(ro, s, !!c.taxExempt)
   const flags = roFlags(ro, s)
   const approved = ro.approvals.reduce((m, a) => Math.max(m, a.amount), 0)
   const techs = db.staff.filter((x) => x.role === 'tech' && (x.active || x.id === ro.techId))
   const closed = ro.status === 'closed'
-  const locked = closed && !store.override
+  const locked = (closed || !!ro.archived) && !store.override
   const edit = (fn: (r: RepairOrder) => void) => updateRO(ro.id, fn)
   const bill = roBilling(db, ro.id)
   const unbilled = round2(t.total - bill.billed)
@@ -70,9 +77,11 @@ export default function RODetail() {
       {/* Header */}
       <div className="ro-head">
         <div>
-          <div className="small muted"><Link to="/">Work in Progress</Link> / Repair Order</div>
+          <div className="small muted"><Link to="/">Work in Progress</Link> / {jt ? `${jt.ticketName} ticket` : 'Repair Order'}</div>
           <div className="row" style={{ gap: 12 }}>
-            <span className="big">RO {ro.number}</span>
+            {jt && <span className="tk-ico sm" title={jt.name}><JobGlyph icon={jt.icon} /></span>}
+            <span className="big">{jt ? 'Ticket' : 'RO'} {ro.number}</span>
+            {ro.archived && <span className="tag" style={{ background: 'var(--done-soft)', color: 'var(--done)' }}>ARCHIVED</span>}
             <StatusBadge status={ro.status} />
             {ro.warranty && <span className="tag warranty">WARRANTY</span>}
           </div>
@@ -99,15 +108,29 @@ export default function RODetail() {
             </Link>
           )}
           {closed && <button className="btn" onClick={() => requestStatus('ready')}>Reopen</button>}
+          {closed && <button className="btn" onClick={() => { const n = store.repeatRO(ro.id); if (n) { store.audit(`Opened RO ${n.number} as a repeat of RO ${ro.number}`); nav(`/ro/${n.id}`) } }} title="New order with the same customer, unit and lines at today's prices">Repeat job</button>}
+          {!closed && !ro.archived && <button className="btn ghost" onClick={() => setArchiving(true)} title="Put this order away without billing it">{'Archive…'}</button>}
         </div>
       </div>
 
+      {ro.archived && (
+        <div className="ar-empty" style={{ marginBottom: 12 }}>
+          <div><b>Archived {fmtDate(ro.archived.at)}</b> by {ro.archived.by}: {ARCHIVE_REASON_LABEL[ro.archived.reason]}{ro.archived.note && ` · “${ro.archived.note}”`}.
+            {ro.archived.partsUsed && ' Its stocked parts were taken out of inventory.'} It’s off the board and out of every count until it’s restored.</div>
+          <div><button className="btn primary" onClick={() => {
+            store.mutate((d) => { restoreOrders(d, [ro.id], store.currentUser) })
+            store.audit(`Restored RO ${ro.number} from the archive`)
+            setToast('Restored to the board')
+          }}>Restore to the board</button></div>
+        </div>
+      )}
+
       {/* Status pipeline */}
-      <div className="pipeline" role="group" aria-label="Status">
-        {STATUS_ORDER.map((st, i) => {
-          const cur = STATUS_ORDER.indexOf(ro.status)
+      <div className="pipeline" role="group" aria-label="Status" style={{ ['--steps' as string]: pipeline.length }}>
+        {pipeline.map((st, i) => {
+          const cur = pipeline.indexOf(ro.status)
           return (
-            <button key={st} className={i === cur ? 'cur' : i < cur ? 'past' : ''} onClick={() => requestStatus(st)} title={`Set status: ${STATUS_LABEL[st]}`}>
+            <button key={st} className={i === cur ? 'cur' : i < cur ? 'past' : ''} disabled={!!ro.archived && !store.override} onClick={() => requestStatus(st)} title={`Set status: ${STATUS_LABEL[st]}`}>
               {STATUS_LABEL[st]}
             </button>
           )
@@ -116,9 +139,10 @@ export default function RODetail() {
 
       <div className="ro-grid">
         <div className="stack">
+          {jt && <JobDetailsPanel ro={ro} locked={locked} edit={edit} />}
           {/* 3 C's */}
           <section className="panel">
-            <div className="panel-head"><h2>Complaint · Cause · Correction</h2></div>
+            <div className="panel-head"><h2>{jt ? 'Work requested · Notes · Done' : 'Complaint · Cause · Correction'}</h2></div>
             <div className="panel-body ccc">
               <label className="field"><span>Complaint</span>
                 <DraftText multiline value={ro.complaint} onCommit={(v) => edit((r) => { r.complaint = v })} /></label>
@@ -185,9 +209,13 @@ export default function RODetail() {
                 {customerPhones(c).map((p) => <Fragment key={p.label}><dt>{p.label === 'Phone' ? 'Phone' : p.label}</dt><dd><a href={`tel:${p.value.replace(/\D/g, '')}`}>{p.value}</a></dd></Fragment>)}
                 {c.contact1 && <><dt>Contact</dt><dd>{[c.contact1, c.contact2].filter(Boolean).join(' / ')}</dd></>}
                 {c.email && <><dt>Email</dt><dd>{c.email}</dd></>}
-                <dt>Unit</dt><dd>{u.make} {u.model}<div className="small muted">{u.type}</div></dd>
-                <dt>Serial</dt><dd className="mono">{u.serial || '—'}</dd>
-                {u.engineHours != null && <><dt>Hours</dt><dd>{u.engineHours}</dd></>}
+                {ro.walkIn && <><dt>Ticket name</dt><dd><b>{ro.walkIn.name}</b>{ro.walkIn.phone && <> · <a href={`tel:${ro.walkIn.phone.replace(/\D/g, '')}`}>{ro.walkIn.phone}</a></>}</dd></>}
+                {u ? <>
+                  <dt>Unit</dt><dd>{u.make} {u.model}<div className="small muted">{u.type}{u.color && ` · ${u.color}`}</div></dd>
+                  <dt>Serial</dt><dd className="mono">{u.serial || '—'}</dd>
+                  {u.engineHours != null && <><dt>Hours</dt><dd>{u.engineHours}</dd></>}
+                  {u.bin && <><dt>Stored</dt><dd>{u.bin}</dd></>}
+                </> : <><dt>Item</dt><dd><DraftText value={ro.item ?? ''} disabled={locked} placeholder="What was brought in" style={{ padding: '3px 6px' }} onCommit={(v) => edit((r) => { r.item = v.trim() || undefined })} /></dd></>}
                 <dt>Tech</dt><dd>
                   <select className="select" style={{ padding: '3px 6px' }} value={ro.techId ?? ''} disabled={locked}
                     onChange={(e) => updateRO(ro.id, (r) => { r.techId = e.target.value || null }, { kind: 'edit', text: `Assigned to ${L.staff.get(e.target.value)?.name ?? 'nobody'}` })}>
@@ -195,9 +223,14 @@ export default function RODetail() {
                     {techs.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
                   </select></dd>
                 <dt>Promise</dt><dd>
+                  {jt ? (
+                    <input type="datetime-local" className="input" style={{ padding: '3px 6px' }} disabled={locked}
+                      value={ro.promiseDate ? localDT(ro.promiseDate) : ''}
+                      onChange={(e) => edit((r) => { r.promiseDate = e.target.value ? new Date(e.target.value).toISOString() : null })} />
+                  ) : (
                   <input type="date" className="input" style={{ padding: '3px 6px' }} disabled={locked}
                     value={ro.promiseDate ? ro.promiseDate.slice(0, 10) : ''}
-                    onChange={(e) => edit((r) => { r.promiseDate = e.target.value ? new Date(e.target.value + 'T17:00:00').toISOString() : null })} /></dd>
+                    onChange={(e) => edit((r) => { r.promiseDate = e.target.value ? new Date(e.target.value + 'T17:00:00').toISOString() : null })} />)}</dd>
                 <dt>Tag #</dt><dd><DraftText value={ro.tag ?? ''} disabled={locked} placeholder="e.g. E71" style={{ padding: '3px 6px', width: 120 }}
                   onCommit={(v) => edit((r) => { r.tag = v.trim().toUpperCase() })} /></dd>
                 <dt>PO #</dt><dd><DraftText value={ro.poNumber ?? ''} disabled={locked} placeholder="optional" style={{ padding: '3px 6px', width: 160 }}
@@ -208,12 +241,13 @@ export default function RODetail() {
                 <dt>Warranty</dt><dd><label className="check"><input type="checkbox" checked={ro.warranty} disabled={locked}
                   onChange={(e) => updateRO(ro.id, (r) => { r.warranty = e.target.checked }, { kind: 'edit', text: e.target.checked ? 'Marked as warranty' : 'Warranty flag removed' })} /> Bill to manufacturer</label></dd>
               </dl>
-              <div className="small" style={{ marginTop: 10 }}>
+              {!jt && <div className="small" style={{ marginTop: 10 }}>
                 <b>Drop-off:</b>{' '}
                 {[ro.checklist.hasFuel ? 'has fuel' : 'no fuel', ro.checklist.bladeOn ? 'blade/bar on' : 'blade/bar off',
                   ro.checklist.batteryIncluded && 'battery included', ro.checklist.accessories && `left: ${ro.checklist.accessories}`].filter(Boolean).join(' · ')}
                 {ro.dropOffNotes && <div style={{ color: 'var(--cust)', marginTop: 4 }}>{ro.dropOffNotes}</div>}
-              </div>
+              </div>}
+              {jt && ro.dropOffNotes && <div className="small" style={{ color: 'var(--cust)', marginTop: 10 }}>{ro.dropOffNotes}</div>}
             </div>
           </section>
 
@@ -256,8 +290,45 @@ export default function RODetail() {
           This removes the repair order and its history for good. Usually you want to close it instead.
         </Modal>
       )}
+      {archiving && <ArchiveModal ids={[ro.id]} blocked={archiveBlocker(db, ro) ? [{ ro, why: archiveBlocker(db, ro)! }] : []}
+        onClose={() => setArchiving(false)} onDone={() => { setArchiving(false); setToast('Archived') }} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
+  )
+}
+
+const localDT = (iso: string) => {
+  const d = new Date(iso); const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/* ---------------- Quick-ticket details ---------------- */
+function JobDetailsPanel({ ro, locked, edit }: { ro: RepairOrder; locked: boolean; edit: (fn: (r: RepairOrder) => void) => void }) {
+  const { db } = useStore()
+  const jt = jobTypeOf(db.settings, ro)
+  if (!jt) return null
+  const f = ro.jobFields ?? {}
+  const set = (k: string, v: string | number | boolean) => edit((r) => { r.jobFields = { ...(r.jobFields ?? {}), [k]: v } })
+  return (
+    <section className="panel">
+      <div className="panel-head"><h2>{jt.name} details</h2></div>
+      <div className="panel-body tk-fields">
+        {jt.fields.map((x) => x.type === 'yesno' ? (
+          <label key={x.key} className="check" style={{ alignSelf: 'end', paddingBottom: 8 }}><input type="checkbox" disabled={locked} checked={!!f[x.key]} onChange={(e) => set(x.key, e.target.checked)} /> {x.label}</label>
+        ) : x.type === 'select' ? (
+          <label key={x.key} className="field"><span>{x.label}</span>
+            <select className="select" disabled={locked} value={String(f[x.key] ?? '')} onChange={(e) => set(x.key, e.target.value)}>
+              <option value="">—</option>{x.options.map((o) => <option key={o}>{o}</option>)}
+              {f[x.key] && !x.options.includes(String(f[x.key])) && <option>{String(f[x.key])}</option>}
+            </select></label>
+        ) : (
+          <label key={x.key} className="field"><span>{x.label}</span>
+            <DraftText value={String(f[x.key] ?? '')} disabled={locked} placeholder={x.placeholder}
+              onCommit={(v) => set(x.key, x.type === 'number' && v.trim() && Number.isFinite(Number(v)) ? Number(v) : v.trim())} /></label>
+        ))}
+        {!jt.fields.length && <div className="muted small">No detail fields for this job type.</div>}
+      </div>
+    </section>
   )
 }
 
@@ -405,14 +476,20 @@ function FeesPanel({ ro, laborTotal, pct, edit }: { ro: RepairOrder; laborTotal:
       </div>
       <div className="table-wrap">
         <table className="table">
-          <thead><tr><th>Description</th><th>Taxable</th><th className="num">Amount</th><th /></tr></thead>
+          <thead><tr><th>Description</th><th>Taxable</th><th className="num">Qty × each</th><th className="num">Amount</th><th /></tr></thead>
           <tbody>
-            {ro.fees.length === 0 && <tr><td colSpan={4} className="empty">No fees.</td></tr>}
+            {ro.fees.length === 0 && <tr><td colSpan={5} className="empty">No fees.</td></tr>}
             {ro.fees.map((f, i) => (
               <tr key={f.id}>
                 <td style={{ width: '60%' }}>{closed ? f.description : <DraftText value={f.description} placeholder="Disposal, pickup/delivery, rush…" ariaLabel="Fee description" onCommit={(v) => edit((r) => { r.fees[i].description = v })} />}</td>
                 <td><input type="checkbox" checked={f.taxable} disabled={closed} aria-label="Taxable" onChange={(e) => edit((r) => { r.fees[i].taxable = e.target.checked })} /></td>
-                <td className="num">{closed ? money(f.amount) : <DraftNumber value={f.amount} decimals={2} width={80} ariaLabel="Fee amount" onCommit={(v) => edit((r) => { r.fees[i].amount = v })} />}</td>
+                <td className="num">{f.qty != null && f.each != null ? (closed ? `${f.qty} × ${money(f.each)}` : (
+                  <span className="row" style={{ justifyContent: 'flex-end', gap: 4 }}>
+                    <DraftNumber value={f.qty} step={1} width={52} ariaLabel="Quantity" onCommit={(v) => edit((r) => { const x = r.fees[i]; x.qty = Math.round(v); x.amount = round2(x.qty * (x.each ?? 0)) })} />
+                    <span className="muted">×</span>
+                    <DraftNumber value={f.each} decimals={2} width={72} ariaLabel="Each" onCommit={(v) => edit((r) => { const x = r.fees[i]; x.each = v; x.amount = round2((x.qty ?? 1) * v) })} />
+                  </span>)) : <span className="muted">—</span>}</td>
+                <td className="num">{closed || f.qty != null ? money(f.amount) : <DraftNumber value={f.amount} decimals={2} width={80} ariaLabel="Fee amount" onCommit={(v) => edit((r) => { r.fees[i].amount = v })} />}</td>
                 <td>{!closed && <button className="btn ghost sm" aria-label="Remove fee" onClick={() => edit((r) => { r.fees.splice(i, 1) })}>✕</button>}</td>
               </tr>
             ))}

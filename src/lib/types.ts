@@ -62,6 +62,45 @@ export interface Customer {
   // A/R
   creditLimit?: number // 0 / blank = no limit
   termsDays?: number // blank = shop default (Settings.arTermsDays)
+  // Record depth (v6). contact1/contact2 stay as mirrors of the first two contacts so imports, print and search keep working.
+  contacts?: Contact[]
+  shipTos?: ShipTo[]
+  noteLog?: CustomerNote[]
+}
+
+export interface Contact {
+  id: string
+  name: string
+  type: string // Owner, Office / billing, Shop foreman, Crew lead… (free text)
+  phone: string
+  cell: string
+  email: string
+  primary: boolean
+  canApprove: boolean // may OK work over the phone
+  notes: string
+}
+
+export interface ShipTo {
+  id: string
+  label: string // "North yard", "Church grounds"
+  address: string
+  address2: string
+  city: string
+  state: string
+  zip: string
+  phone: string
+  isDefault: boolean
+}
+
+export type NoteKind = 'general' | 'call' | 'billing' | 'service' | 'complaint'
+export interface CustomerNote {
+  id: string
+  at: string
+  user: string
+  kind: NoteKind
+  text: string
+  pinned: boolean
+  roId?: string
 }
 
 // ---------- Duplicates & merging ----------
@@ -135,6 +174,18 @@ export interface Unit {
   model: string
   serial: string
   engineHours: number | null
+  // Optional detail (v6)
+  color?: string
+  purchaseDate?: string // YYYY-MM-DD
+  warrantyUntil?: string // YYYY-MM-DD
+  espUntil?: string // extended service plan, YYYY-MM-DD
+  espProvider?: string
+  engineModel?: string
+  engineSerial?: string
+  vin?: string
+  licenseTag?: string
+  bin?: string // where it's stored in the shop / yard
+  notes?: string
 }
 
 /** A manufacturer / product line the dealer carries (Scag, Stihl, Toro…). */
@@ -236,6 +287,53 @@ export interface FeeLine {
   description: string
   amount: number
   taxable: boolean
+  // Flat-rate service lines from quick tickets: amount = qty × each
+  qty?: number
+  each?: number
+}
+
+// ---------- Quick tickets (job types) ----------
+
+export type JobFieldType = 'text' | 'number' | 'select' | 'yesno'
+export interface JobField {
+  key: string
+  label: string
+  type: JobFieldType
+  options: string[] // for 'select'
+  placeholder: string
+}
+/** A flat-rate service the counter can add with a quantity ("Sharpen chain" $12.95 each). */
+export interface JobPreset {
+  id: string
+  label: string
+  price: number
+  taxable: boolean
+}
+export type JobIcon = 'chain' | 'blade' | 'tire' | 'wrench' | 'spark' | 'tag'
+export interface JobType {
+  code: string // stored on the RO as `kind`
+  name: string // "Chain"
+  ticketName: string // "Chain sharpening" — printed on the ticket
+  icon: JobIcon
+  active: boolean
+  unitRequired: boolean
+  skipDiagnose: boolean // Checked in → In progress → Ready → Closed
+  promiseHours: number // default promise time from drop-off
+  qtyLabel: string // "chains", "blades", "tires"
+  fields: JobField[]
+  presets: JobPreset[]
+}
+
+// ---------- Archive ----------
+
+export type ArchiveReason = 'abandoned' | 'declined' | 'no_response' | 'duplicate' | 'done_elsewhere' | 'other'
+export interface ArchiveInfo {
+  at: string
+  by: string
+  reason: ArchiveReason
+  note: string
+  partsUsed: boolean // stocked parts were taken out of inventory when archived
+  batch: string // one id per bulk action, so Undo can reverse exactly that batch
 }
 
 export interface Approval {
@@ -287,6 +385,12 @@ export interface RepairOrder {
   // Optional — printed on the estimate/invoice
   tag?: string // claim tag hung on the unit (e.g. E71)
   poNumber?: string
+  // v6
+  kind?: string // job type code; missing = full repair order
+  jobFields?: Record<string, string | number | boolean>
+  item?: string // what came in when there's no unit record ("MS 271, 20 in bar")
+  walkIn?: { name: string; phone: string } // name/phone on a Cash Customer ticket
+  archived?: ArchiveInfo
 }
 
 export interface Settings {
@@ -312,6 +416,12 @@ export interface Settings {
   // Write-up
   arWarnAtWriteUp: boolean // show balance / past-due / over-limit when an RO is written up
   arAckOverLimit: boolean // over limit or past due: counter must tick "checked with the office" to create the RO
+  // Quick tickets & forgotten orders (v6)
+  jobTypes: JobType[]
+  pickupForgottenDays: number // ready but not picked up this long = forgotten
+  abandonedDays: number // ready this long = suggest "abandoned"
+  estimateForgottenDays: number // estimate / awaiting OK untouched this long = forgotten
+  archivePinOver: number // archiving more than this many at once needs the master PIN
 }
 
 export interface DB {

@@ -36,16 +36,23 @@ src/
     importer.ts      CSV/price-file/customer import (guessMapping, planCustomers/applyCustomers, properCase)
     customerSearch.ts  look-up index/search, duplicate rules, attention flags, Cash Customer
     merge.ts         true customer merge (fields, phones, notes, moves history)
+    jobs.ts          quick tickets: DEFAULT_JOB_TYPES, statusesFor, presetLines, quickComplaint, unitText
+    orders.ts        isOpenRO, forgottenOf (the Forgotten queue), archiveBlocker, archiveOrders/restoreOrders
+    customerRecord.ts  contacts (contactsOf, ensureContacts, syncLegacyContacts), ship-to, notes log
+    seedV6.ts        v6 sample data on its own random stream (quick tickets, forgotten + archived orders, contacts, notes, unit detail)
     ar.ts            A/R engine: allocation (pins → RO deposits → oldest first), as-of math, aging, statements, snapshots, RO settlement
   components/
     ui.tsx fields.tsx lines.tsx   shared UI, DraftText inputs, RO line editor
     override.tsx     master-override PIN prompt
     barcode.tsx      Code 128B barcode as inline SVG (checked against python-barcode)
     custpick.tsx     search-as-you-type customer chooser (merge, A/R)
+    orders.tsx       OrdersBrowser (tabs, filters, email-style selection, bulk bar, undo) + ArchiveModal
   pages/
-    Dashboard, WorkInProgress, NewRO, RODetail   repair-order flow
+    Dashboard, WorkInProgress, NewRO, RODetail   repair-order flow (NewRO = ticket menu → repair write-up or quick ticket)
+    QuickTicket.tsx  TicketMenu + the chain/blade/tire quick-ticket form
+    Orders.tsx       Orders & History page (Open · Forgotten · Invoice history · Archived · Everything)
     PrintRO.tsx      customer-copy invoice/estimate and shop ticket (one page, print CSS)
-    Customers, CustomerDetail                    customer look-up and record
+    Customers, CustomerDetail                    customer look-up and record (tabs: Overview, Contacts, Ship-to, Units, Open orders, Invoice history, Notes)
     MergeCustomers                               merge two customers
     AR.tsx                                       A/R overview, account ledger, posting, apply, warnings
     ARStatements.tsx                             statement run + printable statements (open item / balance forward)
@@ -114,7 +121,7 @@ src/
 - Look-up banner: **Review and merge** (defaults to keeping the record with more history) or **Not a duplicate** (stored in `db.notDuplicates`; "Clear marks" in Settings).
 - Merge screen (`/customers/merge?keep=&remove=`, also "Merge…" on any customer record): pick or swap the two records, choose field by field (only differing fields shown), see what moves. `lib/merge.ts` moves units, ROs, sold wholegoods and A/R entries, fills empty phone slots with the other's numbers (leftovers go to notes), keeps both notes and the earlier customer-since date, records `mergedFrom`, removes the old record, and writes the audit log. Searching the old number still finds the survivor. Needs master override by default (toggle in Settings, only changeable with override on).
 
-## Scope: quick tickets, customer depth, order history & archive (agreed to scope 2026-10-08, NOT built yet)
+## Quick tickets, customer depth, order history & archive (scoped and built 2026-10-08, DB v6)
 
 Why: Rod's counter work is mostly high-volume, low-ticket jobs (chain sharpen, blade sharpen, flat tires) that today need the full repair-order form, and there is no way to clear out forgotten ROs without opening them one by one.
 
@@ -143,11 +150,23 @@ Why: Rod's counter work is mostly high-volume, low-ticket jobs (chain sharpen, b
 - **Archive is not delete and not close.** Close = billed. Archive = hidden, no billing. `RepairOrder.archived?: { at, by, reason, note }`. Reasons: abandoned, estimate declined, no response, duplicate, done elsewhere, other. Archived orders disappear from the dashboard, work-in-progress and Open orders, but stay searchable under "Show archived" and can be restored one by one or in bulk.
 - Guard rails: an RO with A/R charges or a held deposit can't be archived until the money is dealt with; every batch writes one audit line (count and numbers) and shows an **Undo** toast; the app only ever *suggests* archiving, it never auto-archives.
 
-### Build order
-A. v6 migration (kind, jobFields, archived, contacts, shipTo, notes) → B. quick tickets and job-type settings → C. Orders page, selection, Forgotten queue, archive → D. customer tabs (contacts, ship-to, notes, open orders, invoice history) → E. unit fields.
+### Rod's answers (2026-10-08) and how they were built
+1. No extra job types for now. The three defaults ship; Settings → Quick tickets can add more, edit fields/services, hide or restore defaults.
+2. Prices: placeholders ("leave random"). Chain sharpen $12.95, blade sharpen $7.95, plug/patch $12, etc. Editable in Settings; old tickets keep their prices.
+3. Quick tickets don't need a unit (per job type: "Needs a unit on file" toggle). Cash Customer tickets carry `walkIn {name, phone}`; no-unit tickets carry `item` text.
+4. Archiving more than `archivePinOver` (25) orders at once needs the master PIN.
+5. Parts: "not always" → per-archive checkbox "Parts were used… take them out of inventory", off by default. Open ROs never took parts out of stock (that happens at close), so leaving it off = parts back on the shelf. Restoring puts them back in stock (they come out again at close).
+6. Forgotten after 30 days ready (`pickupForgottenDays`), suggested reason "abandoned" at 60 (`abandonedDays`). Estimates/awaiting OK: `estimateForgottenDays` 30. All in Settings → Forgotten orders & archive.
 
-### Open questions for Rod
-1. Job types beyond chain / blade / tire? 2. Flat prices (per chain, per blade, per tire action)? 3. OK that quick tickets don't need a unit? 4. Should bulk-archiving over ~25 orders need the master PIN? 5. Do parts on an archived RO go back to stock? 6. How many days is "forgotten" for pickup-not-collected?
+### Built details worth knowing
+- Archive blocks orders with a live deposit or bill on account (`archiveBlocker`); they're listed and skipped. Closed orders can't be archived (they're billed).
+- Undo restores exactly that batch (`archived.batch`) without touching `updatedAt`, so undone orders stay in the Forgotten queue. A normal restore bumps `updatedAt` (someone looked at it).
+- Archived orders are excluded from: sidebar open count, WIP chips (a WIP search still finds them, tagged ARCHIVED), dashboard, parts "committed", look-up open counts, `roFlags`.
+- Quick-ticket lines are fee lines with `qty`/`each` (amount = qty × each); the RO screen edits qty and price; the invoice prints qty and each. Totals math is unchanged.
+- Repeat job (closed RO header, Invoice history row): `repeatRO` copies customer, unit, kind, job fields and lines at today's prices into a new checked-in order.
+- Contacts: `contacts[]` is canonical once edited; `contact1/contact2` are mirrors (primary first) so import, print and old screens still work. Search covers contact names/phones and ship-to addresses. Merge keeps both sides' contacts (by name), ship-tos and notes.
+- Customer `notes` stays as the orange write-up alert; the new `noteLog` is the dated, pinnable log.
+- Not built: Documents tab (would need file storage beyond this browser DB); emailing.
 
 ## Current status
 
@@ -159,13 +178,14 @@ A. v6 migration (kind, jobFields, archived, contacts, shipTo, notes) → B. quic
 - Printed invoice, estimate and shop ticket in the modern one-page layout, with barcode.
 - Master override, zero-out.
 - GitHub Pages auto-deploy.
+- **Quick tickets, Orders & History, archive, customer record tabs (v6)**: see the section above. Checked in headless Chromium at 1440 px and 390 px: menu, chain ticket save / save & next / print, forgotten queue select-all → archive 50 with PIN → undo, shift-click range, restore, invoice history, every customer tab, contact search.
 - **Customer look-up** (`pages/Customers.tsx` + `lib/customerSearch.ts`), built to the approved mockup:
   - Omnibox matches every word across name, any phone, customer # (prefix), contacts, unit make/model/serial, email and address. Non-name hits show a "Matched …" line. Ranked: exact # → name starts-with → name word → other fields, then most recent visit.
   - Chips: top 6 categories (+ "More…" select), Has open order, Tax exempt, Needs attention (credit flag, possible duplicate, no phone).
   - Preview pane: reach them (tel:/mailto: links), contacts, equipment, last 4 ROs, notes, account grid. Buttons: New repair order, New estimate (`/ro/new?status=estimate`), Open record.
   - Duplicate banner follows the Settings rules, with Review and merge / Not a duplicate (see "Duplicate rules & merging").
   - Keys: ↑/↓ move, Enter opens the record, Shift+Enter new RO, Esc clears. Search, filters and selection live in the URL, so Back restores them.
-  - Built-in Cash Customer #1000 (`isCash`), pinned above results, excluded from counts/duplicates. DB v3 migration adds it (v4 adds `dupRules`, `arTermsDays`, `notDuplicates`, `ar`; v5 adds statement/write-up settings, `statementRuns`, `arHistory`) (or adopts an imported "Cash" customer already at #1000); Settings → clear customers re-adds it.
+  - Built-in Cash Customer #1000 (`isCash`), pinned above results, excluded from counts/duplicates. DB v3 migration adds it (v4 adds `dupRules`, `arTermsDays`, `notDuplicates`, `ar`; v5 adds statement/write-up settings, `statementRuns`, `arHistory`; v6 adds job types and forgotten/archive settings, all other v6 fields are optional) (or adopts an imported "Cash" customer already at #1000); Settings → clear customers re-adds it.
   - Demo seed now has categories, addresses, contacts, a tax-exempt church and one deliberate duplicate pair (Dwight Pruitt #2413/#2444).
 
 **Not working or unverified:**
@@ -181,14 +201,13 @@ A. v6 migration (kind, jobFields, archived, contacts, shipTo, notes) → B. quic
    - Photos of the dropdown lists: Category, Priority, Location, Contact Type, Address Type, and the tax table.
    - The Customer Units tab and Edit-mode screenshots.
    - A raw Infinity database record for a well-populated customer (for the A/R import and to check field meanings).
-2. **Finish Phase 1 customer maintenance** (look-up and Cash Customer are done):
-   - Customer record with Settings, Contacts, ShipTo and a Notes log (contacts are still just `contact1/contact2` strings; notes are one text field).
+2. **Finish Phase 1 customer maintenance** (look-up, Cash Customer, contacts, ship-to, notes log and unit detail are done):
    - A data-cleanup tool for duplicates, missing phones, bad ZIPs and ALL-CAPS names.
-   - Needs new types in `types.ts` for contacts, ship-to addresses and notes, a v4 migration in `store.tsx`, and a rewrite of `CustomerDetail.tsx`. When contacts/notes become arrays, update `buildIndex` in `customerSearch.ts` so search still covers them.
-   - Possibly reuse `searchCustomers` in the New RO customer picker so both searches behave the same.
+   - Possibly reuse `searchCustomers` in the New RO / quick-ticket customer picker so both searches behave the same.
+   - Map Infinity's Contact Type / Address Type lists into `CONTACT_TYPES` once Rod sends them.
 3. **Fix the CreditCode handling** (item 1 above).
 4. **Sync the PC folder** with GitHub.
-5. **Phase 2:** Open Orders and Invoice History tabs, unit fields (warranty, ESP, purchase date, color, bin, engine #, VIN, tag), an email log with `mailto`, Documents, credit-limit warnings.
+5. **Phase 2 (rest):** an email log with `mailto`, Documents (needs file storage). Open Orders / Invoice History tabs, unit fields and credit-limit warnings are done.
 6. **Infinity A/R import**: once Rod pulls the raw record of a well-populated customer, map it and build the bulk import of balances/open invoices.
 7. **Out of scope:** GL, expense accounts, finance charges, card processing, back orders, multi-location transfers, actually sending email.
 

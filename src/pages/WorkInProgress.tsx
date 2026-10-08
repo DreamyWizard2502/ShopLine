@@ -5,20 +5,21 @@ import type { RepairOrder } from '../lib/types'
 import {
   STATUS_LABEL, STATUS_ORDER, ageBucket, AGE_BUCKETS, daysIdle, daysOpen, fmtDate, money, roFlags, roTotals,
 } from '../lib/calc'
-import { Age, Flags, Icon, StatusBadge } from '../components/ui'
+import { Age, Flags, Icon, JobGlyph, StatusBadge } from '../components/ui'
+import { jobTypeOf, unitText } from '../lib/jobs'
 
 type QuickFilter = 'open' | 'customer' | 'parts' | 'shop' | 'ready' | 'attention' | 'zero' | 'warranty' | 'closed' | 'all'
 const QUICK: { key: QuickFilter; label: string; test: (ro: RepairOrder, flags: string[]) => boolean }[] = [
-  { key: 'open', label: 'All open', test: (r) => r.status !== 'closed' },
-  { key: 'attention', label: 'Needs attention', test: (r, f) => r.status !== 'closed' && f.length > 0 },
-  { key: 'shop', label: 'In the shop', test: (r) => ['checked_in', 'diagnosing', 'in_progress'].includes(r.status) },
-  { key: 'customer', label: 'Waiting on customer', test: (r) => r.status === 'awaiting_ok' || r.status === 'estimate' },
-  { key: 'parts', label: 'Waiting on parts', test: (r) => r.status === 'parts_on_order' },
-  { key: 'ready', label: 'Ready for pickup', test: (r) => r.status === 'ready' },
+  { key: 'open', label: 'All open', test: (r) => r.status !== 'closed' && !r.archived },
+  { key: 'attention', label: 'Needs attention', test: (r, f) => r.status !== 'closed' && !r.archived && f.length > 0 },
+  { key: 'shop', label: 'In the shop', test: (r) => !r.archived && ['checked_in', 'diagnosing', 'in_progress'].includes(r.status) },
+  { key: 'customer', label: 'Waiting on customer', test: (r) => !r.archived && (r.status === 'awaiting_ok' || r.status === 'estimate') },
+  { key: 'parts', label: 'Waiting on parts', test: (r) => !r.archived && r.status === 'parts_on_order' },
+  { key: 'ready', label: 'Ready for pickup', test: (r) => !r.archived && r.status === 'ready' },
   { key: 'zero', label: '$0 / no estimate', test: (_r, f) => f.includes('zero') },
-  { key: 'warranty', label: 'Warranty', test: (r) => r.warranty && r.status !== 'closed' },
+  { key: 'warranty', label: 'Warranty', test: (r) => r.warranty && r.status !== 'closed' && !r.archived },
   { key: 'closed', label: 'Closed', test: (r) => r.status === 'closed' },
-  { key: 'all', label: 'Everything', test: () => true },
+  { key: 'all', label: 'Everything', test: (r) => !r.archived },
 ]
 
 type GroupBy = 'none' | 'status' | 'customer' | 'tech' | 'age'
@@ -32,6 +33,7 @@ export default function WorkInProgress() {
   const filter = (params.get('filter') as QuickFilter) || 'open'
   const group = (params.get('group') as GroupBy) || 'none'
   const techFilter = params.get('tech') || ''
+  const jobFilter = params.get('job') || ''
   const [q, setQ] = useState('')
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'idle', dir: -1 })
 
@@ -44,15 +46,17 @@ export default function WorkInProgress() {
   // Precompute everything per RO once.
   const rows = useMemo(() => db.ros.map((ro) => {
     const c = L.customer.get(ro.customerId)
-    const u = L.unit.get(ro.unitId)
+    const u = ro.unitId ? L.unit.get(ro.unitId) : undefined
+    const ut = unitText(ro, u)
+    const jt = jobTypeOf(db.settings, ro)
     const tech = ro.techId ? L.staff.get(ro.techId) : undefined
     const t = roTotals(ro, db.settings, !!c?.taxExempt)
     return {
-      ro, c, u, tech, total: t.total,
+      ro, c, u, ut, jt, tech, total: t.total,
       flags: roFlags(ro, db.settings),
       open: daysOpen(ro), idle: ro.status === 'closed' ? 0 : daysIdle(ro),
       haystack: [
-        ro.number, c?.name, c?.phone, c?.phone.replace(/\D/g, ''), u?.serial, u?.make, u?.model, u?.type, tech?.name,
+        ro.number, c?.name, c?.phone, c?.phone.replace(/\D/g, ''), u?.serial, u?.make, u?.model, u?.type, tech?.name, ro.item, ro.walkIn?.name, ro.walkIn?.phone, jt?.name,
       ].join(' ').toLowerCase(),
     }
   }), [db.ros, db.settings, L])
@@ -68,7 +72,8 @@ export default function WorkInProgress() {
       // a search looks across everything, including closed
       (terms.length ? true : f.test(r.ro, r.flags)) &&
       terms.every((t) => r.haystack.includes(t)) &&
-      (!techFilter || r.ro.techId === techFilter))
+      (!techFilter || r.ro.techId === techFilter) &&
+      (!jobFilter || (jobFilter === 'repair' ? !r.ro.kind : r.ro.kind === jobFilter)))
     const val = (r: (typeof rows)[number]): string | number => {
       switch (sort.key) {
         case 'number': return r.ro.number
@@ -85,7 +90,7 @@ export default function WorkInProgress() {
       const va = val(a), vb = val(b)
       return (va < vb ? -1 : va > vb ? 1 : 0) * sort.dir
     })
-  }, [rows, filter, q, sort, techFilter])
+  }, [rows, filter, q, sort, techFilter, jobFilter])
 
   const groups = useMemo(() => {
     if (group === 'none') return [{ key: '', label: '', items: visible }]
@@ -125,7 +130,8 @@ export default function WorkInProgress() {
           <div className="sub">{counts.open} open repair orders · {counts.attention} need attention</div>
         </div>
         <span className="spacer" />
-        <Link to="/ro/new" className="btn primary">{Icon.plus} New RO <span className="kbd" style={{ borderColor: 'rgba(255,255,255,.5)', color: '#fff' }}>N</span></Link>
+        <Link to="/orders?tab=forgotten" className="btn">{Icon.archive} Clean up forgotten</Link>
+        <Link to="/ro/new" className="btn primary">{Icon.plus} New ticket <span className="kbd" style={{ borderColor: 'rgba(255,255,255,.5)', color: '#fff' }}>N</span></Link>
       </div>
 
       <div className="row wrap" style={{ marginBottom: 12, gap: 12 }}>
@@ -152,6 +158,11 @@ export default function WorkInProgress() {
         <select className="select" style={{ width: 160 }} value={techFilter} onChange={(e) => setParam('tech', e.target.value)} aria-label="Filter by tech">
           <option value="">All techs</option>
           {techs.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+        <select className="select" style={{ width: 170 }} value={jobFilter} onChange={(e) => setParam('job', e.target.value)} aria-label="Filter by job type">
+          <option value="">All job types</option>
+          <option value="repair">Repair orders only</option>
+          {db.settings.jobTypes.map((j) => <option key={j.code} value={j.code}>{j.name} tickets</option>)}
         </select>
       </div>
 
@@ -186,9 +197,9 @@ export default function WorkInProgress() {
               <GroupRows key={g.key} label={g.label} count={g.items.length} total={g.items.reduce((a, r) => a + r.total, 0)}>
                 {g.items.map((r) => (
                   <tr key={r.ro.id} className="click" onClick={() => nav(`/ro/${r.ro.id}`)}>
-                    <td><span className="ro-num">{r.ro.number}</span>{r.ro.warranty && <> <span className="tag warranty">WTY</span></>}</td>
-                    <td><div className="cell-main">{r.c?.name}</div><div className="cell-sub">{r.c?.phone}</div></td>
-                    <td><div className="cell-main">{r.u?.make} {r.u?.model}</div><div className="cell-sub">{r.u?.type} · <span className="mono">{r.u?.serial}</span></div></td>
+                    <td className="nw"><span className="ro-num">{r.ro.number}</span>{r.jt && <span className="ob-kind" title={r.jt.name}><JobGlyph icon={r.jt.icon} size={14} />{r.jt.name}</span>}{r.ro.warranty && <> <span className="tag warranty">WTY</span></>}{r.ro.archived && <> <span className="tag" style={{ background: 'var(--done-soft)', color: 'var(--done)' }}>ARCHIVED</span></>}</td>
+                    <td><div className="cell-main">{r.c?.isCash && r.ro.walkIn?.name ? r.ro.walkIn.name : r.c?.name}</div><div className="cell-sub">{r.c?.isCash ? `Cash${r.ro.walkIn?.phone ? ' · ' + r.ro.walkIn.phone : ''}` : r.c?.phone}</div></td>
+                    <td><div className="cell-main">{r.ut.main}</div><div className="cell-sub">{r.ut.sub}</div></td>
                     <td><StatusBadge status={r.ro.status} /></td>
                     <td className="nw">{r.tech?.name ?? <span className="muted">—</span>}</td>
                     <td className="small nw">{fmtDate(r.ro.openedAt)}</td>

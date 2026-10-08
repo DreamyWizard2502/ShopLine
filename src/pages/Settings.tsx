@@ -1,7 +1,10 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { buildIndex, ensureCashCustomer, findDuplicates } from '../lib/customerSearch'
 import { useStore } from '../lib/store'
-import type { DB, DupSignal, DuplicateRules, Staff, Line } from '../lib/types'
+import type { DB, DupSignal, DuplicateRules, Staff, Line, JobType, JobField, JobFieldType, JobIcon } from '../lib/types'
+import { DEFAULT_JOB_TYPES, newJobCode } from '../lib/jobs'
+import { JobGlyph } from '../components/ui'
 import { fmtDateTime, uid } from '../lib/calc'
 import { DB_VERSION, defaultSettings } from '../lib/seed'
 import { download } from '../lib/importer'
@@ -18,6 +21,13 @@ export default function SettingsPage() {
   const [clearOpen, setClearOpen] = useState(false)
   const [msg, setMsg] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  const loc = useLocation()
+  // Links like /settings#job-types land on that panel.
+  useEffect(() => {
+    if (!loc.hash) return
+    const t = setTimeout(() => document.getElementById(loc.hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+    return () => clearTimeout(t)
+  }, [loc.hash])
   const set = (fn: (x: typeof s) => void) => mutate((d) => { fn(d.settings) })
   const setStaff = (id: string, fn: (x: Staff) => void) => mutate((d) => { fn(d.staff.find((x) => x.id === id)!) })
   const setLine = (code: string, fn: (x: Line) => void) => mutate((d) => { fn(d.lines.find((x) => x.code === code)!) })
@@ -70,6 +80,19 @@ export default function SettingsPage() {
             <label className="field"><span>Wholegoods aged after (days)</span><DraftNumber value={s.agedUnitDays} width={120} onCommit={(v) => set((x) => { x.agedUnitDays = Math.round(v) })} /></label>
           </div>
         </section>
+
+        <section className="panel" id="forgotten">
+          <div className="panel-head"><h2>Forgotten orders &amp; archive</h2></div>
+          <div className="panel-body grid3">
+            <label className="field"><span>Ready, not picked up: forgotten after (days)</span><DraftNumber value={s.pickupForgottenDays} width={120} onCommit={(v) => set((x) => { x.pickupForgottenDays = Math.max(1, Math.round(v)) })} /></label>
+            <label className="field"><span>Suggest “abandoned” after (days ready)</span><DraftNumber value={s.abandonedDays} width={120} onCommit={(v) => set((x) => { x.abandonedDays = Math.max(1, Math.round(v)) })} /></label>
+            <label className="field"><span>Estimate / awaiting OK: forgotten after (days)</span><DraftNumber value={s.estimateForgottenDays} width={120} onCommit={(v) => set((x) => { x.estimateForgottenDays = Math.max(1, Math.round(v)) })} /></label>
+            <label className="field"><span>Archiving more than this many at once needs the master PIN</span><DraftNumber value={s.archivePinOver} step={1} width={120} onCommit={(v) => set((x) => { x.archivePinOver = Math.max(0, Math.round(v)) })} /></label>
+          </div>
+          <div className="panel-body small muted" style={{ paddingTop: 0 }}>Anything else open with no activity for the “stale” days above also counts as forgotten. Archived orders aren’t billed or deleted; they leave the board and can be restored from Orders → Archived.</div>
+        </section>
+
+        <JobTypesPanel />
 
         <DuplicateRulesPanel />
 
@@ -345,5 +368,112 @@ function DuplicateRulesPanel() {
         </div>
       </div>
     </section>
+  )
+}
+
+/* ---------------- Quick tickets (job types) ---------------- */
+const ICONS: JobIcon[] = ['chain', 'blade', 'tire', 'wrench', 'spark', 'tag']
+const FIELD_TYPES: Record<JobFieldType, string> = { select: 'Pick list', text: 'Text', number: 'Number', yesno: 'Yes / no' }
+
+function JobTypesPanel() {
+  const { db, mutate, audit } = useStore()
+  const [open, setOpen] = useState<string | null>(null)
+  const jobs = db.settings.jobTypes
+  const setJob = (code: string, fn: (j: JobType) => void) => mutate((d) => { fn(d.settings.jobTypes.find((j) => j.code === code)!) })
+  const add = () => {
+    const code = newJobCode('New job', jobs.map((j) => j.code))
+    mutate((d) => { d.settings.jobTypes.push({ code, name: 'New job', ticketName: 'New job', icon: 'wrench', active: true, unitRequired: false, skipDiagnose: true, promiseHours: 24, qtyLabel: 'items', fields: [], presets: [{ id: uid(), label: 'Service', price: 10, taxable: true }] }) })
+    setOpen(code)
+  }
+  return (
+    <section className="panel" id="job-types">
+      <div className="panel-head"><h2>Quick tickets</h2><span className="spacer" />
+        <button className="btn sm" onClick={() => { mutate((d) => { const have = new Set(d.settings.jobTypes.map((j) => j.code)); for (const j of DEFAULT_JOB_TYPES) if (!have.has(j.code)) d.settings.jobTypes.push(structuredClone(j)) }); audit('Restored missing default job types') }}>Restore defaults</button>
+        <button className="btn sm" onClick={add}>+ Add job type</button></div>
+      <div className="panel-body small muted" style={{ paddingBottom: 0 }}>These are the tiles on “New ticket” next to Repair order and Estimate. Each has its own detail fields and flat-rate services. Old tickets keep the prices they were written at.</div>
+      <div className="panel-body stack" style={{ gap: 8 }}>
+        {jobs.map((j) => (
+          <div key={j.code} className="cr-card">
+            <div className="row" style={{ cursor: 'pointer' }} onClick={() => setOpen(open === j.code ? null : j.code)}>
+              <span className="tk-ico sm"><JobGlyph icon={j.icon} size={18} /></span>
+              <b>{j.name}</b><span className="muted small">{j.presets.length} service{j.presets.length === 1 ? '' : 's'} · {j.fields.length} field{j.fields.length === 1 ? '' : 's'}{!j.active && ' · hidden'}</span>
+              <span className="spacer" /><span className="small muted">{open === j.code ? 'Close ▲' : 'Edit ▼'}</span>
+            </div>
+            {open === j.code && <JobEditor j={j} set={(fn) => setJob(j.code, fn)} onRemove={() => {
+              const used = db.ros.some((r) => r.kind === j.code)
+              if (used) { setJob(j.code, (x) => { x.active = false }); audit(`Hid job type ${j.name} (it has tickets)`); return }
+              mutate((d) => { d.settings.jobTypes = d.settings.jobTypes.filter((x) => x.code !== j.code) }); audit(`Removed job type ${j.name}`); setOpen(null)
+            }} used={db.ros.some((r) => r.kind === j.code)} />}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function JobEditor({ j, set, onRemove, used }: { j: JobType; set: (fn: (j: JobType) => void) => void; onRemove: () => void; used: boolean }) {
+  const setField = (i: number, fn: (f: JobField) => void) => set((x) => { fn(x.fields[i]) })
+  const move = <T,>(arr: T[], i: number, d: number) => { const k = i + d; if (k < 0 || k >= arr.length) return; [arr[i], arr[k]] = [arr[k], arr[i]] }
+  return (
+    <div className="stack" style={{ marginTop: 12 }}>
+      <div className="grid3">
+        <label className="field"><span>Tile name</span><DraftText value={j.name} onCommit={(v) => v.trim() && set((x) => { x.name = v.trim() })} /></label>
+        <label className="field"><span>Printed on the ticket as</span><DraftText value={j.ticketName} onCommit={(v) => v.trim() && set((x) => { x.ticketName = v.trim() })} /></label>
+        <label className="field"><span>Counting word</span><DraftText value={j.qtyLabel} placeholder="chains" onCommit={(v) => set((x) => { x.qtyLabel = v.trim() })} /></label>
+        <label className="field"><span>Default promise (hours)</span><DraftNumber value={j.promiseHours} step={1} width={100} onCommit={(v) => set((x) => { x.promiseHours = Math.round(v) })} /></label>
+        <div className="field"><span>Icon</span><div className="row" style={{ gap: 4 }}>
+          {ICONS.map((ic) => <button key={ic} className={`btn sm ${j.icon === ic ? 'primary' : ''}`} aria-label={ic} onClick={() => set((x) => { x.icon = ic })}><JobGlyph icon={ic} size={16} /></button>)}
+        </div></div>
+      </div>
+      <div className="row wrap" style={{ gap: 16 }}>
+        <label className="check"><input type="checkbox" checked={j.active} onChange={(e) => set((x) => { x.active = e.target.checked })} /> Show on New ticket</label>
+        <label className="check"><input type="checkbox" checked={j.unitRequired} onChange={(e) => set((x) => { x.unitRequired = e.target.checked })} /> Needs a unit on file</label>
+        <label className="check"><input type="checkbox" checked={j.skipDiagnose} onChange={(e) => set((x) => { x.skipDiagnose = e.target.checked })} /> Skip diagnose / awaiting OK / parts steps</label>
+      </div>
+
+      <div>
+        <div className="row"><b className="small">Services (flat rate)</b><span className="spacer" />
+          <button className="btn sm" onClick={() => set((x) => { x.presets.push({ id: uid(), label: 'New service', price: 0, taxable: true }) })}>+ Service</button></div>
+        <table className="table" style={{ marginTop: 6 }}>
+          <thead><tr><th>Service</th><th className="num">Price each</th><th>Taxable</th><th /></tr></thead>
+          <tbody>
+            {j.presets.map((p, i) => (
+              <tr key={p.id}>
+                <td><DraftText value={p.label} ariaLabel="Service name" onCommit={(v) => v.trim() && set((x) => { x.presets[i].label = v.trim() })} /></td>
+                <td className="num"><DraftNumber value={p.price} decimals={2} width={90} ariaLabel="Price" onCommit={(v) => set((x) => { x.presets[i].price = v })} /></td>
+                <td><input type="checkbox" checked={p.taxable} aria-label="Taxable" onChange={(e) => set((x) => { x.presets[i].taxable = e.target.checked })} /></td>
+                <td className="nw"><button className="btn ghost sm" aria-label="Move up" onClick={() => set((x) => move(x.presets, i, -1))}>↑</button>
+                  <button className="btn ghost sm" aria-label="Remove service" onClick={() => set((x) => { x.presets.splice(i, 1) })}>✕</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div>
+        <div className="row"><b className="small">Detail fields</b><span className="spacer" />
+          <button className="btn sm" onClick={() => set((x) => { x.fields.push({ key: uid(), label: 'New field', type: 'text', options: [], placeholder: '' }) })}>+ Field</button></div>
+        <table className="table" style={{ marginTop: 6 }}>
+          <thead><tr><th>Label</th><th>Type</th><th>Choices (comma separated)</th><th /></tr></thead>
+          <tbody>
+            {j.fields.map((f, i) => (
+              <tr key={f.key}>
+                <td><DraftText value={f.label} ariaLabel="Field label" onCommit={(v) => v.trim() && setField(i, (x) => { x.label = v.trim() })} /></td>
+                <td><select className="select" value={f.type} aria-label="Field type" onChange={(e) => setField(i, (x) => { x.type = e.target.value as JobFieldType })}>
+                  {(Object.keys(FIELD_TYPES) as JobFieldType[]).map((t) => <option key={t} value={t}>{FIELD_TYPES[t]}</option>)}</select></td>
+                <td>{f.type === 'select'
+                  ? <DraftText value={f.options.join(', ')} ariaLabel="Choices" onCommit={(v) => setField(i, (x) => { x.options = v.split(',').map((o) => o.trim()).filter(Boolean) })} />
+                  : f.type === 'yesno' ? <span className="muted small">—</span>
+                  : <DraftText value={f.placeholder} placeholder="Hint shown in the box" ariaLabel="Hint" onCommit={(v) => setField(i, (x) => { x.placeholder = v })} />}</td>
+                <td className="nw"><button className="btn ghost sm" aria-label="Move up" onClick={() => set((x) => move(x.fields, i, -1))}>↑</button>
+                  <button className="btn ghost sm" aria-label="Remove field" onClick={() => set((x) => { x.fields.splice(i, 1) })}>✕</button></td>
+              </tr>
+            ))}
+            {!j.fields.length && <tr><td colSpan={4} className="empty">No detail fields.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div><button className="btn ghost danger sm" onClick={onRemove}>{used ? 'Hide this job type (it has tickets)' : 'Remove this job type'}</button></div>
+    </div>
   )
 }

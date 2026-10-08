@@ -1,7 +1,8 @@
 // Customer look-up: one search box that checks every field a counter person
 // might know (name, any phone, customer #, contact, unit serial, email, address),
 // plus duplicate detection and the built-in Cash Customer.
-import type { Customer, DB, DuplicateRules, DupSignal, Unit } from './types'
+import type { Contact, Customer, DB, DuplicateRules, DupSignal, Unit } from './types'
+import { contactsOf } from './customerRecord'
 import { customerPhones } from './calc'
 
 // ---------- Cash Customer ----------
@@ -29,6 +30,9 @@ export interface CustEntry {
   name: string // lower-case
   phones: { label: string; value: string; digits: string }[]
   contacts: string[]
+  people: Contact[] // full contact records (name, type, phones)
+  contactPhones: { who: string; value: string; digits: string }[]
+  shipLines: string[] // ship-to addresses
   email: string
   addrLine: string // "418 Elder Ln, Mustang, OK 73064"
   units: Unit[]
@@ -43,7 +47,7 @@ export function buildIndex(db: DB): CustEntry[] {
   const ros = new Map<string, { open: number; total: number; last: string | null }>()
   for (const r of db.ros) {
     const x = ros.get(r.customerId) ?? { open: 0, total: 0, last: null }
-    x.total++; if (r.status !== 'closed') x.open++
+    x.total++; if (r.status !== 'closed' && !r.archived) x.open++
     if (!x.last || r.openedAt > x.last) x.last = r.openedAt
     ros.set(r.customerId, x)
   }
@@ -53,13 +57,23 @@ export function buildIndex(db: DB): CustEntry[] {
       c,
       name: c.name.toLowerCase(),
       phones: customerPhones(c).map((p) => ({ ...p, digits: p.value.replace(/\D/g, '') })),
-      contacts: [c.contact1, c.contact2].filter((x): x is string => !!x?.trim()),
+      ...contactParts(c),
       email: (c.email ?? '').toLowerCase(),
       addrLine: addressLine(c),
       units: units.get(c.id) ?? [],
       open: r?.open ?? 0, total: r?.total ?? 0, last: r?.last ?? null,
     }
   })
+}
+
+function contactParts(c: Customer) {
+  const people = contactsOf(c)
+  return {
+    contacts: people.map((p) => p.name).filter((x) => x.trim()),
+    people,
+    contactPhones: people.flatMap((p) => [p.phone, p.cell].filter(Boolean).map((v) => ({ who: p.name, value: v, digits: v.replace(/\D/g, '') }))),
+    shipLines: (c.shipTos ?? []).map((s) => [s.label, s.address, s.address2, s.city, s.state, s.zip].filter(Boolean).join(', ')),
+  }
 }
 
 export function addressLine(c: Customer) {
@@ -98,6 +112,8 @@ function matchToken(e: CustEntry, tok: string): { field: Field; label: string } 
   if (digits.length >= 3 && digits.length >= tok.length - 2) {
     const p = e.phones.find((x) => x.digits.includes(digits))
     if (p) return { field: 'phone', label: `Matched ${p.label === 'Phone' ? 'phone' : p.label.toLowerCase()} ${p.value}` }
+    const cp = e.contactPhones.find((x) => x.digits.includes(digits))
+    if (cp) return { field: 'phone', label: `Matched ${cp.who}’s phone ${cp.value}` }
   }
   const ct = e.contacts.find((x) => x.toLowerCase().includes(tok))
   if (ct) return { field: 'contact', label: `Matched contact ${ct}` }
@@ -108,6 +124,8 @@ function matchToken(e: CustEntry, tok: string): { field: Field; label: string } 
   if (u) return { field: 'unit', label: `Matched unit ${u.make} ${u.model}${u.serial ? `, S/N ${u.serial}` : ''}` }
   if (e.email.includes(tok)) return { field: 'email', label: `Matched email ${e.c.email}` }
   if (e.addrLine.toLowerCase().includes(tok)) return { field: 'address', label: `Matched address ${e.addrLine}` }
+  const sh = e.shipLines.find((x) => x.toLowerCase().includes(tok))
+  if (sh) return { field: 'address', label: `Matched ship-to ${sh}` }
   return null
 }
 

@@ -114,7 +114,7 @@ export const FLAG_LABEL: Record<Flag, string> = {
 
 /** Problems worth a human looking at. */
 export function roFlags(ro: RepairOrder, s: Settings): Flag[] {
-  if (ro.status === 'closed') return []
+  if (ro.status === 'closed' || ro.archived) return []
   const flags: Flag[] = []
   const t = roTotals(ro, s)
   if (daysIdle(ro) >= s.staleDays) flags.push('stale')
