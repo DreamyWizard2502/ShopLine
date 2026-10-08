@@ -5,8 +5,9 @@ import type {
   TimelineEvent, Unit, UnitType, FeeLine, Approval, Wholegood, WholegoodStatus,
 } from './types'
 import { STATUS_LABEL, STATUS_ORDER, round2 } from './calc'
+import { ensureCashCustomer } from './customerSearch'
 
-export const DB_VERSION = 2
+export const DB_VERSION = 3
 
 // Small deterministic PRNG so every reset gives the same shop.
 function mulberry32(seed: number) {
@@ -68,6 +69,13 @@ const LAST = ['Hollis', 'Pruitt', 'Vance', 'Ochoa', 'Brantley', 'Keel', 'Medina'
 const BIZ = ['Red Dirt Lawn Co.', 'Prairie Edge Landscaping', 'Cimarron Turf Pros', 'Sooner Cut Lawn Care',
   'Twin Oaks Tree Service', 'Redbud Grounds Maintenance', 'Canadian River Mowing', 'Big Sky Property Care',
   'Crosstimbers Landscape', 'Wheatland Outdoor Services']
+
+// Business → Infinity-style category (anything not listed is Landscape).
+const BIZ_CATEGORY: Record<string, string> = {
+  'Big Sky Property Care': 'Commercial', 'Canadian River Mowing': 'Government', 'Wheatland Outdoor Services': 'Farm',
+}
+const TOWNS: [string, string][] = [['Mustang', '73064'], ['Mustang', '73064'], ['Yukon', '73099'], ['Tuttle', '73089'], ['El Reno', '73036'], ['Oklahoma City', '73179']]
+const STREETS = ['Elder Ln', 'S Mustang Rd', 'W Forest Dr', 'Horizon Blvd', 'N Sara Rd', 'Czech Hall Rd', 'Cemetery Rd', 'W Main St', 'Ranchwood Blvd', 'SW 74th St']
 
 const STAFF: Staff[] = [
   { id: 's-ana', name: 'Ana R.', role: 'counter', active: true },
@@ -261,6 +269,12 @@ export function makeSeed(now = Date.now()): DB {
       isBusiness, notes: isBusiness ? 'Commercial account — call office for approvals.' : '',
       createdAt: iso(int(200, 900)),
     }
+    const [city, zip] = pick(TOWNS)
+    c.address = `${int(100, 9999)} ${pick(STREETS)}`; c.city = city; c.state = 'OK'; c.zip = zip
+    c.category = isBusiness ? (BIZ_CATEGORY[name] ?? 'Landscape') : 'Personal Use'
+    if (c.category === 'Government' || c.category === 'Farm') c.taxExempt = true
+    if (isBusiness) { c.contact1 = `${pick(FIRST)} ${pick(LAST)}`; c.priceLevel = 'Dealer Pricing' }
+    else if (r() < 0.4) c.cellPhone = phone()
     customers.push(c)
     const n = isBusiness ? int(3, 6) : int(1, 2)
     for (let k = 0; k < n; k++) {
@@ -273,6 +287,23 @@ export function makeSeed(now = Date.now()): DB {
         engineHours: big ? int(40, 1400) : null,
       })
     }
+  }
+
+  // A church (tax exempt) and an old duplicate record — the kind of mess real imports have.
+  {
+    const church: Customer = {
+      id: id('c'), number: custNo++, name: 'Cedar Hollow Fellowship', phone: phone(), email: '', isBusiness: true,
+      notes: 'Tax-exempt certificate on file.', createdAt: iso(int(200, 900)), category: 'Church', taxExempt: true,
+      contact1: `${pick(FIRST)} ${pick(LAST)}`, address: '516 W Forest Dr', city: 'Mustang', state: 'OK', zip: '73064',
+    }
+    customers.push(church)
+    units.push({ id: id('u'), customerId: church.id, type: 'Riding Mower', make: 'Toro', model: 'TimeCutter 42', serial: `TO${int(100000, 999999)}C`, engineHours: int(80, 600) })
+    const orig = customers[BIZ.length + 2]
+    customers.push({
+      id: id('c'), number: custNo++, name: orig.name, phone: orig.cellPhone ?? orig.phone, email: '', isBusiness: false,
+      notes: '', createdAt: iso(int(1400, 1800)), category: 'Personal Use',
+      address: orig.address, city: orig.city, state: 'OK', zip: orig.zip,
+    })
   }
 
   // Repair orders
@@ -426,7 +457,7 @@ export function makeSeed(now = Date.now()): DB {
   // Claim tags on everything still in the shop (letter + number, like the paper tags hung on units)
   ros.forEach((ro, i) => { ro.tag = `${'ABCDE'[i % 5]}${10 + ((i * 37) % 90)}` })
 
-  return {
+  const db: DB = {
     version: DB_VERSION,
     settings,
     customers,
@@ -442,6 +473,8 @@ export function makeSeed(now = Date.now()): DB {
     importLog: [],
     auditLog: [],
   }
+  ensureCashCustomer(db)
+  return db
 }
 
 function wgSerial(line: string, int: (a: number, b: number) => number) {

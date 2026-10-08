@@ -7,6 +7,7 @@ import type { Customer, DB, Part, RepairOrder, ROStatus, TimelineEvent, Unit } f
 import { makeSeed, DB_VERSION, defaultLines, defaultSettings } from './seed'
 import { STATUS_LABEL, uid } from './calc'
 import { idbGet, idbSet } from './idb'
+import { ensureCashCustomer } from './customerSearch'
 
 const IDB_KEY = 'db'
 const LEGACY_LS_KEY = 'shopline.db.v1'
@@ -32,6 +33,11 @@ function migrate(raw: DB): DB {
       priceUpdatedAt: (p as Partial<Part>).priceUpdatedAt ?? null,
     }))
     db.version = 2
+  }
+  if (db.version < 3) {
+    // v3: built-in walk-in Cash Customer (#1000) for the customer look-up.
+    ensureCashCustomer(db)
+    db.version = 3
   }
   return db
 }

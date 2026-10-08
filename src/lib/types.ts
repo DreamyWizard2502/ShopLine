@@ -56,6 +56,7 @@ export interface Customer {
   arType?: string // accounts-receivable type, e.g. "Open Item"
   deliveryCode?: string
   creditFlag?: boolean // Infinity "CreditCode"
+  isCash?: boolean // the built-in walk-in "Cash Customer" (#1000) — pinned in look-up, never flagged
 }
 
 export interface Unit {

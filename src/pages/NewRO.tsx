@@ -24,7 +24,7 @@ export default function NewRO() {
   const [unitId, setUnitId] = useState<string>('')
   const [newUnit, setNewUnit] = useState<null | { type: UnitType; make: string; model: string; serial: string; engineHours: string }>(null)
 
-  const [status, setStatus] = useState<ROStatus>('checked_in')
+  const [status, setStatus] = useState<ROStatus>(() => (params.get('status') === 'estimate' ? 'estimate' : 'checked_in'))
   const [complaint, setComplaint] = useState('')
   const [dropOffNotes, setDropOffNotes] = useState('')
   const [promiseDate, setPromiseDate] = useState('')

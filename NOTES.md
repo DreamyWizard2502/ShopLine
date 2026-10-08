@@ -1,12 +1,12 @@
 # ShopLine: handoff notes
 
-Read this first. It is the state of the project as of 2026-10-08.
+Read this first. It is the state of the project as of 2026-10-08 (updated after the customer look-up build).
 
 ## What it is
 
 ShopLine is a browser-based dealer management system for outdoor power equipment shops. It is Rod's own branding and code, **not** C-Systems' or Infinity's. Rod works hourly at Links Lawn Equipment (an Infinity dealer in Mustang, OK) and is building this as a portfolio and learning project, with the longer aim of fixing Infinity's pain points. He wants the same depth of recorded information as Infinity, but a modern, easier-to-use layout. **Do not make a carbon copy of Infinity's screens.**
 
-Working agreement: define scope and design first, get Rod's OK, then build. Nothing from the customer-maintenance work below has been built yet.
+Working agreement: define scope and design first, get Rod's OK, then build. The customer **look-up** (Phase 1, part 1) is built; the rest of customer maintenance is not.
 
 ## Run it
 
@@ -83,9 +83,17 @@ src/
 - Printed invoice, estimate and shop ticket in the modern one-page layout, with barcode.
 - Master override, zero-out.
 - GitHub Pages auto-deploy.
+- **Customer look-up** (`pages/Customers.tsx` + `lib/customerSearch.ts`), built to the approved mockup:
+  - Omnibox matches every word across name, any phone, customer # (prefix), contacts, unit make/model/serial, email and address. Non-name hits show a "Matched …" line. Ranked: exact # → name starts-with → name word → other fields, then most recent visit.
+  - Chips: top 6 categories (+ "More…" select), Has open order, Tax exempt, Needs attention (credit flag, possible duplicate, no phone).
+  - Preview pane: reach them (tel:/mailto: links), contacts, equipment, last 4 ROs, notes, account grid. Buttons: New repair order, New estimate (`/ro/new?status=estimate`), Open record.
+  - Duplicate banner = same normalized name AND a shared phone, address or email. It links to the other record; there is **no Merge yet** (waiting on Rod).
+  - Keys: ↑/↓ move, Enter opens the record, Shift+Enter new RO, Esc clears. Search, filters and selection live in the URL, so Back restores them.
+  - Built-in Cash Customer #1000 (`isCash`), pinned above results, excluded from counts/duplicates. DB v3 migration adds it (or adopts an imported "Cash" customer already at #1000); Settings → clear customers re-adds it.
+  - Demo seed now has categories, addresses, contacts, a tax-exempt church and one deliberate duplicate pair (Dwight Pruitt #2413/#2444).
 
 **Not working or unverified:**
-- The Pages site was only confirmed to answer with its title. The full render wasn't checked, because the cloud sandbox can't reach github.io. Rod should open it and look.
+- The Pages site was only confirmed to answer with its title. The full render wasn't checked, because the cloud sandbox can't reach github.io. Rod should open it and look. The look-up was checked in headless Chromium at 1440 px and 390 px.
 - The CreditCode meaning above.
 - Rod's PC folder (`C:\Users\Rodri\Projects\ShopLine`) is **behind GitHub**. Either write the files over or have him pull the repo with GitHub Desktop. He hasn't chosen.
 - Infinity's export only has customer header and settings fields. Notes, Contacts tab, ShipTo, Documents, unit lists and A/R detail would start empty unless Rod finds other reports. Extracting all customers and ROs from Infinity is still an unsolved problem.
@@ -97,13 +105,12 @@ src/
    - Photos of the dropdown lists: Category, Priority, Location, Contact Type, Address Type, and the tax table.
    - The Customer Units tab and Edit-mode screenshots.
    - Whether Merge Customers is in Phase 1. A/R is already settled: hold off.
-2. **Build Phase 1 customer maintenance**, following the approved look-up mockup:
-   - Search-first finder with the omnibox, filter chips, "Matched" lines, preview pane and keyboard navigation.
-   - Customer record with Settings, Contacts, ShipTo and a Notes log.
-   - Built-in Cash Customer #1000.
+2. **Finish Phase 1 customer maintenance** (look-up and Cash Customer are done):
+   - Customer record with Settings, Contacts, ShipTo and a Notes log (contacts are still just `contact1/contact2` strings; notes are one text field).
    - Merge Customers, if Rod wants it in Phase 1.
    - A data-cleanup tool for duplicates, missing phones, bad ZIPs and ALL-CAPS names.
-   - Needs new types in `types.ts` for contacts, ship-to addresses and notes, a migration for the existing DB in `store.tsx`, and a rewrite of `Customers.tsx` and `CustomerDetail.tsx`.
+   - Needs new types in `types.ts` for contacts, ship-to addresses and notes, a v4 migration in `store.tsx`, and a rewrite of `CustomerDetail.tsx`. When contacts/notes become arrays, update `buildIndex` in `customerSearch.ts` so search still covers them.
+   - Possibly reuse `searchCustomers` in the New RO customer picker so both searches behave the same.
 3. **Fix the CreditCode handling** (item 1 above).
 4. **Sync the PC folder** with GitHub.
 5. **Phase 2:** Open Orders and Invoice History tabs, unit fields (warranty, ESP, purchase date, color, bin, engine #, VIN, tag), an email log with `mailto`, Documents, credit-limit warnings.

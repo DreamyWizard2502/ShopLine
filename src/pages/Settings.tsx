@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { ensureCashCustomer } from '../lib/customerSearch'
 import { useStore } from '../lib/store'
 import type { DB, Staff, Line } from '../lib/types'
 import { fmtDateTime, uid } from '../lib/calc'
@@ -204,6 +205,7 @@ export default function SettingsPage() {
       {clearOpen && <ClearModal onClose={() => setClearOpen(false)} onBackup={exportBackup} onClear={(what) => {
         mutate((d) => {
           if (what.customers) { d.customers = []; d.units = []; d.ros = []; d.nextCustomerNumber = 1001; d.nextRONumber = 10001
+            ensureCashCustomer(d)
             for (const w of d.wholegoods) { w.soldToCustomerId = null; w.customerUnitId = null } }
           if (what.wholegoods) d.wholegoods = []
           if (what.parts) d.parts = []
