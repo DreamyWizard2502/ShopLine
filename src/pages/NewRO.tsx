@@ -2,6 +2,8 @@ import { useMemo, useRef, useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useStore } from '../lib/store'
 import { CUSTOMER_CATEGORIES, customerPhones } from '../lib/calc'
+import { accountFor } from '../lib/ar'
+import { AccountWarning } from './AR'
 import type { Customer, Unit, UnitType, ROStatus } from '../lib/types'
 
 export const UNIT_TYPES: UnitType[] = ['Push Mower', 'Self-Propelled Mower', 'Zero-Turn Mower', 'Riding Mower', 'Chainsaw',
@@ -15,7 +17,7 @@ export function formatPhone(v: string) {
 }
 
 export default function NewRO() {
-  const { db, createRO, createCustomer, createUnit } = useStore()
+  const { db, createRO, createCustomer, createUnit, override, audit } = useStore()
   const nav = useNavigate()
   const [params] = useSearchParams()
 
@@ -32,6 +34,9 @@ export default function NewRO() {
   const [techId, setTechId] = useState('')
   const [checklist, setChecklist] = useState({ hasFuel: false, bladeOn: true, batteryIncluded: false, accessories: '' })
   const [error, setError] = useState('')
+  const [ack, setAck] = useState(false)
+  const acct = customer && !customer.isCash ? accountFor(db, customer) : null
+  const needsAck = !!acct && db.settings.arWarnAtWriteUp && db.settings.arAckOverLimit && (acct.pastDue > 0 || acct.overLimit) && !override
 
   const custUnits = useMemo(() => db.units.filter((u) => u.customerId === customer?.id), [db.units, customer])
   useEffect(() => {
@@ -48,6 +53,7 @@ export default function NewRO() {
       c = createCustomer({ ...newCust, name: newCust.name.trim(), notes: '', cellPhone: newCust.cellPhone || undefined, category: newCust.category.trim() || undefined, contact1: newCust.contact1.trim() || undefined })
     }
     if (!c) return setError('Pick or add a customer.')
+    if (needsAck && !ack) return setError('This account is past due or over its limit. Check with the office, then tick the box under the customer.')
     let u: Unit | undefined = db.units.find((x) => x.id === unitId)
     if (newUnit) {
       if (!newUnit.make.trim() || !newUnit.model.trim()) return setError('New unit needs a make and model.')
@@ -63,6 +69,7 @@ export default function NewRO() {
       promiseDate: promiseDate ? new Date(promiseDate + 'T17:00:00').toISOString() : null,
       complaint: complaint.trim(), cause: '', correction: '', dropOffNotes: dropOffNotes.trim(), checklist,
     })
+    if (needsAck) audit(`RO ${ro.number} written up for #${c.number} ${c.name} while past due / over limit (counter checked with the office)`)
     nav(`/ro/${ro.id}`)
   }
 
@@ -83,10 +90,14 @@ export default function NewRO() {
                   <div className="cell-sub">{customerPhones(customer).map((p) => `${p.label === 'Phone' ? '' : p.label + ' '}${p.value}`).join(' · ')}{customer.email && ` · ${customer.email}`}</div>
                   {(customer.contact1 || customer.category) && <div className="cell-sub">{[customer.category, customer.contact1 && `Attn: ${customer.contact1}`].filter(Boolean).join(' · ')}</div>}
                   {customer.creditFlag && <div className="small" style={{ color: 'var(--bad)', fontWeight: 600 }}>⚠ Credit flag on this account. Check with the office before starting work.</div>}
+                  <AccountWarning c={customer} />
+                  {needsAck && (
+                    <label className="check small" style={{ marginTop: 4 }}><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} /> I checked with the office about this account</label>
+                  )}
                   {customer.taxExempt && <div className="small" style={{ color: 'var(--ok)' }}>Tax exempt</div>}
                   {customer.notes && <div className="small" style={{ color: 'var(--cust)' }}>{customer.notes}</div>}</div>
                 <span className="spacer" />
-                <button className="btn sm" onClick={() => setCustomer(null)}>Change</button>
+                <button className="btn sm" onClick={() => { setCustomer(null); setAck(false) }}>Change</button>
               </div>
             ) : newCust ? (
               <div className="stack">

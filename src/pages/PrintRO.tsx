@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useLookups, useStore } from '../lib/store'
 import { APPROVAL_METHOD_LABEL, PART_STATUS_LABEL, STATUS_LABEL, customerPhones, fmtDate, fmtDateTime, money, roTotals } from '../lib/calc'
 import { Barcode } from '../components/barcode'
+import { roSettlement } from '../lib/ar'
 
 /** One labelled value in the info strip. Empty values print a dash so the grid never collapses. */
 function Meta({ label, children, mono }: { label: string; children: React.ReactNode; mono?: boolean }) {
@@ -41,6 +42,7 @@ export default function PrintRO() {
   const taxPct = (s.taxRate * 100).toFixed(3).replace(/\.?0+$/, '')
   const subtotal = t.labor + t.parts + t.fees
   const now = new Date().toISOString()
+  const bill = roSettlement(db, ro.id, t.total)
 
   return (
     <div className="inv-wrap">
@@ -210,6 +212,14 @@ export default function PrintRO() {
                 <span>{ro.warranty ? 'Due from customer' : closed ? 'Total due' : 'Estimated total'}</span>
                 <span>{money(ro.warranty ? 0 : t.total)}</span>
               </div>
+              {!ro.warranty && (bill.deposited > 0 || bill.onAccount > 0) && (
+                <>
+                  {bill.deposited > 0 && <div className="inv-trow"><span>Less deposit{bill.deposits.length > 1 ? 's' : ''} paid</span><span>−{money(bill.deposited)}</span></div>}
+                  {bill.onAccount > 0 && <div className="inv-trow"><span>Less billed to your account</span><span>−{money(bill.onAccount)}</span></div>}
+                  <div className="inv-trow inv-sub"><span>{closed ? 'Balance due' : 'Due at pickup'}</span><span>{money(bill.due)}</span></div>
+                  {bill.leftover > 0 && <div className="inv-trow"><span className="inv-dim">Deposit left over (stays on your account)</span><span>{money(bill.leftover)}</span></div>}
+                </>
+              )}
             </div>
           </section>
         )}

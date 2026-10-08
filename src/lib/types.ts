@@ -81,7 +81,8 @@ export interface DuplicateRules {
 
 // ---------- Accounts receivable ----------
 
-export type ArKind = 'charge' | 'payment' | 'credit'
+/** charge / refund raise the balance; payment / credit lower it. */
+export type ArKind = 'charge' | 'payment' | 'credit' | 'refund'
 export type PayMethod = 'cash' | 'check' | 'card' | 'other'
 
 /**
@@ -96,10 +97,34 @@ export interface ArEntry {
   amount: number
   ref: string // RO #, check #, "Opening balance"…
   memo: string
-  roId?: string // set when the charge came from a closed repair order
-  method?: PayMethod // payments only
+  roId?: string // the repair order this charge bills, or this deposit was taken for
+  partial?: boolean // charge: progress billing on an RO that's still open
+  deposit?: boolean // payment: taken up front for `roId`; held for that RO until it's billed
+  method?: PayMethod // payments and refunds
+  /** payment/credit: dollars pinned to specific charges ("apply this check to RO 10422"). The rest goes oldest first. */
+  applications?: { chargeId: string; amount: number }[]
   user: string
   voided?: { at: string; user: string; reason: string }
+}
+
+/** One printed statement batch (the statement cycle). */
+export interface StatementRun {
+  id: string
+  date: string // statement (cycle close) date, YYYY-MM-DD
+  at: string // when it was printed
+  user: string
+  customerIds: string[]
+}
+
+/** Month-end A/R snapshot, frozen when the month is closed. */
+export interface ArSnapshot {
+  id: string
+  period: string // YYYY-MM
+  asOf: string // ISO, end of that month
+  closedAt: string
+  user: string
+  totals: { balance: number; current: number; d31: number; d61: number; d91: number; pastDue: number; credit: number; accounts: number }
+  accounts: { customerId: string; number: number; name: string; balance: number; current: number; d31: number; d61: number; d91: number }[]
 }
 
 export interface Unit {
@@ -280,6 +305,13 @@ export interface Settings {
   overridePin: string
   dupRules: DuplicateRules
   arTermsDays: number // default "net" days before a charge is past due
+  // Statements
+  statementDay: number // cycle closes on this day of the month; 0 = last day of the month
+  statementMessage: string // printed on every statement
+  statementMinBalance: number // skip statements under this balance (unless there was activity)
+  // Write-up
+  arWarnAtWriteUp: boolean // show balance / past-due / over-limit when an RO is written up
+  arAckOverLimit: boolean // over limit or past due: counter must tick "checked with the office" to create the RO
 }
 
 export interface DB {
@@ -300,4 +332,6 @@ export interface DB {
   /** Customer-id pairs ("a|b", sorted) someone marked "not a duplicate". */
   notDuplicates: string[]
   ar: ArEntry[]
+  statementRuns: StatementRun[]
+  arHistory: ArSnapshot[]
 }

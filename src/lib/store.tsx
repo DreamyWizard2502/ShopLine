@@ -46,6 +46,13 @@ function migrate(raw: DB): DB {
     db.ar ??= []
     db.version = 4
   }
+  if (db.version < 5) {
+    // v5: statements, month-end history, deposits / applications / refunds (no shape change to old entries).
+    db.settings = { ...defaultSettings, ...db.settings }
+    db.statementRuns ??= []
+    db.arHistory ??= []
+    db.version = 5
+  }
   return db
 }
 

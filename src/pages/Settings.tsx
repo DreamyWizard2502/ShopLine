@@ -77,9 +77,19 @@ export default function SettingsPage() {
           <div className="panel-head"><h2>Accounts receivable</h2></div>
           <div className="panel-body grid3">
             <label className="field"><span>Default terms (days until past due)</span><DraftNumber value={s.arTermsDays} width={120} onCommit={(v) => set((x) => { x.arTermsDays = Math.max(0, Math.round(v)) })} /></label>
-            <div className="small muted" style={{ gridColumn: 'span 2', alignSelf: 'end', paddingBottom: 8 }}>
-              Net days for charge accounts. A customer's own terms (on their record) override this. Aging buckets are by invoice date: Current (0–30), 31–60, 61–90, Over 90.
-            </div>
+            <label className="field"><span>Statements close on</span>
+              <select className="select" value={s.statementDay} onChange={(e) => set((x) => { x.statementDay = Number(e.target.value) })}>
+                <option value={0}>Last day of the month</option>
+                {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>Day {d}</option>)}
+              </select></label>
+            <label className="field"><span>Skip statements under ($, unless there was activity)</span><DraftNumber value={s.statementMinBalance} decimals={2} width={120} onCommit={(v) => set((x) => { x.statementMinBalance = Math.max(0, v) })} /></label>
+            <label className="field" style={{ gridColumn: '1 / -1' }}><span>Message printed on every statement</span>
+              <DraftText multiline value={s.statementMessage} onCommit={(v) => set((x) => { x.statementMessage = v })} /></label>
+            <label className="check" style={{ gridColumn: '1 / -1' }}><input type="checkbox" checked={s.arWarnAtWriteUp} onChange={(e) => set((x) => { x.arWarnAtWriteUp = e.target.checked })} /> Show the account’s balance, past due and credit limit when writing up a repair order</label>
+            <label className="check" style={{ gridColumn: '1 / -1' }}><input type="checkbox" checked={s.arAckOverLimit} disabled={!s.arWarnAtWriteUp} onChange={(e) => set((x) => { x.arAckOverLimit = e.target.checked })} /> Past due or over limit: the counter must tick “I checked with the office” before the RO can be created (master override skips it)</label>
+          </div>
+          <div className="panel-body small muted" style={{ paddingTop: 0 }}>
+            A customer’s own terms (on their record) override the default. Aging is by invoice date: Current (0–30), 31–60, 61–90, Over 90. Set a customer’s A/R type to “Balance Forward” for balance-forward statements; anything else is open item.
           </div>
         </section>
 

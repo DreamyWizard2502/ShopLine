@@ -9,7 +9,8 @@ import {
 import { Flags, Modal, StatusBadge } from '../components/ui'
 import { DraftNumber, DraftText } from '../components/fields'
 import { normPartNo } from '../lib/importer'
-import { chargeForRO } from '../lib/ar'
+import { atFromDate, roBilling, roSettlement, todayYMD } from '../lib/ar'
+import { AccountWarning } from './AR'
 
 export default function RODetail() {
   const { id } = useParams()
@@ -36,7 +37,8 @@ export default function RODetail() {
   const closed = ro.status === 'closed'
   const locked = closed && !store.override
   const edit = (fn: (r: RepairOrder) => void) => updateRO(ro.id, fn)
-  const arCharge = chargeForRO(db, ro.id)
+  const bill = roBilling(db, ro.id)
+  const unbilled = round2(t.total - bill.billed)
 
   // Pull stocked parts out of inventory when the job is closed out.
   const closeOut = () => store.mutate((d) => {
@@ -75,23 +77,25 @@ export default function RODetail() {
             {ro.warranty && <span className="tag warranty">WARRANTY</span>}
           </div>
           <div style={{ marginTop: 4 }}><Flags flags={flags} /></div>
+          <div style={{ marginTop: 6 }}><AccountWarning c={c} compact /></div>
         </div>
         <span className="spacer" />
         <div className="row wrap">
           <Link className="btn" to={`/ro/${ro.id}/print/ticket`}>Print shop ticket</Link>
           <Link className="btn" to={`/ro/${ro.id}/print/invoice`}>{closed ? 'Print invoice' : 'Print estimate'}</Link>
           {ro.status === 'ready' && <button className="btn primary" onClick={() => requestStatus('closed')}>Close &amp; invoice</button>}
-          {closed && !c.isCash && !arCharge && t.total > 0 && (
+          {closed && !c.isCash && !ro.warranty && unbilled > 0.004 && (
             <button className="btn" onClick={() => {
-              store.postAr({ customerId: c.id, kind: 'charge', at: ro.closedAt ?? new Date().toISOString(), amount: t.total, ref: `RO ${ro.number}`, memo: 'Repair order invoice', roId: ro.id })
-              store.audit(`Charged RO ${ro.number} (${money(t.total)}) to #${c.number} ${c.name}'s account`)
+              store.postAr({ customerId: c.id, kind: 'charge', at: ro.closedAt ?? new Date().toISOString(), amount: unbilled, ref: `RO ${ro.number}`,
+                memo: bill.billed ? `Repair order invoice, balance after ${money(bill.billed)} billed earlier` : 'Repair order invoice', roId: ro.id })
+              store.audit(`Charged RO ${ro.number} (${money(unbilled)}) to #${c.number} ${c.name}'s account`)
               setToast('Charged to account')
-            }}>Charge to account</button>
+            }}>Charge {bill.billed ? 'the rest ' : ''}to account · {money(unbilled)}</button>
           )}
-          {arCharge && (
-            <Link className={`btn ${Math.abs(arCharge.amount - t.total) > 0.004 ? 'danger' : ''}`} to={`/ar/${c.id}`}
-              title={Math.abs(arCharge.amount - t.total) > 0.004 ? 'The RO total changed after it was charged. Void the charge on the account and charge it again.' : 'View on the customer account'}>
-              On account {money(arCharge.amount)}{Math.abs(arCharge.amount - t.total) > 0.004 && ' — total changed'}
+          {bill.billed > 0 && (
+            <Link className={`btn ${closed && Math.abs(unbilled) > 0.004 && unbilled < 0 ? 'danger' : ''}`} to={`/ar/${c.id}`}
+              title={unbilled < -0.004 ? 'More was billed than the RO total. Void a charge on the account and re-bill.' : 'View on the customer account'}>
+              On account {money(bill.billed)}{unbilled < -0.004 && ' — over-billed'}
             </Link>
           )}
           {closed && <button className="btn" onClick={() => requestStatus('ready')}>Reopen</button>}
@@ -150,6 +154,8 @@ export default function RODetail() {
               )}
             </div>
           </section>
+
+          {!c.isCash && !ro.warranty && <RoAccountPanel roId={ro.id} roNumber={ro.number} closed={closed} total={t.total} customerId={c.id} onToast={setToast} />}
 
           {!ro.warranty && (
             <section className="panel">
@@ -464,3 +470,93 @@ function ApprovalModal({ defaultAmount, customerName, onClose, onSave }: {
     </Modal>
   )
 }
+
+/** Deposits taken and partial bills for one RO, on the customer's A/R account. */
+function RoAccountPanel({ roId, roNumber, closed, total, customerId, onToast }: {
+  roId: string; roNumber: number; closed: boolean; total: number; customerId: string; onToast: (t: string) => void
+}) {
+  const { db, postAr, audit } = useStore()
+  const c = db.customers.find((x) => x.id === customerId)!
+  const b = roSettlement(db, roId, total)
+  const [deposit, setDeposit] = useState(false)
+  const [partial, setPartial] = useState(false)
+  const due = round2(total - b.billed)
+  return (
+    <section className="panel">
+      <div className="panel-head"><h3>Account &amp; deposits</h3><span className="spacer" />
+        <Link className="small" to={`/ar/${c.id}`}>Account</Link></div>
+      <div className="panel-body stack" style={{ gap: 8 }}>
+        <div className="totals" style={{ padding: 0 }}>
+          <span>Deposits taken</span><span>{money(b.deposited)}</span>
+          <span>Billed to account</span><span>{money(b.billed)}</span>
+          <span className="small muted">{closed ? 'Not billed yet' : 'Left to bill at close'}</span><span className="small">{money(Math.max(0, due))}</span>
+          {(b.deposited > 0 || b.billed > 0) && <><span className="small muted">{closed ? 'Balance due' : 'Owed at pickup'}</span><span className="small" style={{ fontWeight: 600 }}>{money(b.due)}</span></>}
+          {b.leftover > 0 && <><span className="small muted">Deposit left over</span><span className="small">{money(b.leftover)}</span></>}
+        </div>
+        {[...b.deposits, ...b.charges].sort((x, y) => x.at.localeCompare(y.at)).map((e) => (
+          <div key={e.id} className="small row" style={{ gap: 6 }}>
+            <span className="muted nw">{fmtDate(e.at)}</span>
+            <span>{e.kind === 'charge' ? (e.partial ? 'Partial bill' : 'Billed') : `Deposit · ${e.method ?? ''}`}</span>
+            <span className="spacer" /><span className="mono">{money(e.amount)}</span>
+          </div>
+        ))}
+        {!closed && (
+          <div className="row wrap" style={{ gap: 6 }}>
+            <button className="btn sm" onClick={() => setDeposit(true)}>Take deposit</button>
+            <button className="btn sm" onClick={() => setPartial(true)}>Bill part now</button>
+          </div>
+        )}
+        <div className="small muted">{closed ? 'Use “Charge to account” at the top to bill what’s left.' : 'Deposits are held for this RO and come off the bill when it’s charged. Partial bills charge the account now; the rest is billed at close.'}</div>
+      </div>
+      {deposit && <DepositModal c={c} roId={roId} roNumber={roNumber} onClose={() => setDeposit(false)} onDone={(amt) => { onToast(`Deposit ${money(amt)} taken`); setDeposit(false) }} />}
+      {partial && <PartialModal max={Math.max(0, due)} onClose={() => setPartial(false)} onSave={(amt, memo) => {
+        postAr({ customerId: c.id, kind: 'charge', at: new Date().toISOString(), amount: amt, ref: `RO ${roNumber}`, memo: memo || 'Progress bill', roId, partial: true })
+        audit(`Partial bill on RO ${roNumber}: ${money(amt)} to #${c.number} ${c.name}`)
+        onToast(`Billed ${money(amt)} to account`); setPartial(false)
+      }} />}
+    </section>
+  )
+}
+
+function DepositModal({ c, roId, roNumber, onClose, onDone }: { c: { id: string; number: number; name: string }; roId: string; roNumber: number; onClose: () => void; onDone: (amt: number) => void }) {
+  const { postAr, audit } = useStore()
+  const [amt, setAmt] = useState('')
+  const [method, setMethod] = useState<'cash' | 'check' | 'card' | 'other'>('card')
+  const [ref, setRef] = useState('')
+  const [date, setDate] = useState(todayYMD())
+  const n = Number(amt.replace(/[$,\s]/g, '')) || 0
+  return (
+    <Modal title={`Take deposit · RO ${roNumber}`} onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={n <= 0} onClick={() => {
+        postAr({ customerId: c.id, kind: 'payment', at: atFromDate(date), amount: round2(n), ref: ref.trim() || `Deposit RO ${roNumber}`, memo: `Deposit on RO ${roNumber}`, roId, deposit: true, method })
+        audit(`Deposit ${money(n)} on RO ${roNumber} from #${c.number} ${c.name}`)
+        onDone(n)
+      }}>Take deposit</button></>}>
+      <div className="grid2" style={{ gap: 8 }}>
+        <label className="field"><span>Amount</span><input className="input mono" inputMode="decimal" autoFocus placeholder="0.00" value={amt} onChange={(e) => setAmt(e.target.value)} /></label>
+        <label className="field"><span>Method</span><select className="select" value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
+          <option value="cash">Cash</option><option value="check">Check</option><option value="card">Card</option><option value="other">Other</option></select></label>
+        <label className="field"><span>Check # / reference</span><input className="input" value={ref} onChange={(e) => setRef(e.target.value)} /></label>
+        <label className="field"><span>Date</span><input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+      </div>
+      <div className="small muted" style={{ marginTop: 8 }}>Held on {c.name}’s account for this RO. It comes off the bill when the RO is charged, and prints on the invoice.</div>
+    </Modal>
+  )
+}
+
+function PartialModal({ max, onClose, onSave }: { max: number; onClose: () => void; onSave: (amt: number, memo: string) => void }) {
+  const [amt, setAmt] = useState('')
+  const [memo, setMemo] = useState('')
+  const n = Number(amt.replace(/[$,\s]/g, '')) || 0
+  return (
+    <Modal title="Bill part of this RO now" onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={n <= 0} onClick={() => onSave(round2(n), memo.trim())}>Charge to account</button></>}>
+      <div className="stack">
+        <label className="field"><span>Amount (up to {money(max)} so far)</span><input className="input mono" inputMode="decimal" autoFocus placeholder="0.00" value={amt} onChange={(e) => setAmt(e.target.value)} /></label>
+        <label className="field"><span>What it’s for</span><input className="input" placeholder="Parts ordered, first half of labor…" value={memo} onChange={(e) => setMemo(e.target.value)} /></label>
+        {n > max + 0.004 && <div className="small" style={{ color: 'var(--cust)' }}>More than the RO total so far. That’s allowed, but the final bill will come out negative unless more work is added.</div>}
+      </div>
+    </Modal>
+  )
+}
+

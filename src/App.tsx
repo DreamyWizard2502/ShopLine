@@ -15,6 +15,8 @@ import Wholegoods from './pages/Wholegoods'
 import ImportPage from './pages/Import'
 import MergeCustomers from './pages/MergeCustomers'
 import ArOverview, { ArAccount } from './pages/AR'
+import ArStatements, { StatementBatchPrint, StatementSinglePrint } from './pages/ARStatements'
+import ArHistory from './pages/ARHistory'
 import { allAccounts } from './lib/ar'
 import { OverrideHost, requestOverride } from './components/override'
 
@@ -100,6 +102,8 @@ export default function App() {
       <HashRouter>
         <Routes>
           <Route path="/ro/:id/print/:kind" element={<PrintRO />} />
+          <Route path="/ar/statements/print" element={<StatementBatchPrint />} />
+          <Route path="/ar/statement/:id" element={<StatementSinglePrint />} />
           <Route path="*" element={
             <Shell>
               <Routes>
@@ -111,6 +115,8 @@ export default function App() {
                 <Route path="/customers/merge" element={<MergeCustomers />} />
                 <Route path="/customers/:id" element={<CustomerDetail />} />
                 <Route path="/ar" element={<ArOverview />} />
+                <Route path="/ar/statements" element={<ArStatements />} />
+                <Route path="/ar/history" element={<ArHistory />} />
                 <Route path="/ar/:id" element={<ArAccount />} />
                 <Route path="/parts" element={<Parts />} />
                 <Route path="/wholegoods" element={<Wholegoods />} />

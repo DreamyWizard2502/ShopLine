@@ -6,8 +6,9 @@ import type {
 } from './types'
 import { STATUS_LABEL, STATUS_ORDER, round2, roTotals } from './calc'
 import { ensureCashCustomer } from './customerSearch'
+import { lastCycleClose, previousCycleClose, snapshotFor, statementCandidates } from './ar'
 
-export const DB_VERSION = 4
+export const DB_VERSION = 5
 
 // Small deterministic PRNG so every reset gives the same shop.
 function mulberry32(seed: number) {
@@ -44,6 +45,11 @@ export const defaultSettings: Settings = {
     mergeNeedsOverride: true,
   },
   arTermsDays: 30,
+  statementDay: 0,
+  statementMessage: 'Payment is due within your terms. Make checks payable to the shop and include your account number. Questions about your account? Call us.',
+  statementMinBalance: 1,
+  arWarnAtWriteUp: true,
+  arAckOverLimit: true,
 }
 
 export const defaultLines: Line[] = [
@@ -308,6 +314,11 @@ export function makeSeed(now = Date.now()): DB {
     }
     customers.push(church)
     units.push({ id: id('u'), customerId: church.id, type: 'Riding Mower', make: 'Toro', model: 'TimeCutter 42', serial: `TO${int(100000, 999999)}C`, engineHours: int(80, 600) })
+    const rd = customers[0] // Red Dirt Lawn Co. — an old record typed with "Company" and no period
+    customers.push({
+      id: id('c'), number: custNo++, name: 'Red Dirt Lawn Company', phone: rd.phone, email: rd.email, isBusiness: true,
+      notes: '', createdAt: iso(int(1500, 2000)), category: 'Landscape', contact1: rd.contact1,
+    })
     const orig = customers[BIZ.length + 2]
     customers.push({
       id: id('c'), number: custNo++, name: orig.name, phone: orig.cellPhone ?? orig.phone, email: '', isBusiness: false,
@@ -470,31 +481,110 @@ export function makeSeed(now = Date.now()): DB {
   // Claim tags on everything still in the shop (letter + number, like the paper tags hung on units)
   ros.forEach((ro, i) => { ro.tag = `${'ABCDE'[i % 5]}${10 + ((i * 37) % 90)}` })
 
-  // A/R: commercial and tax-exempt accounts charge closed work to their account.
-  // Older charges are mostly paid; a few run late so aging has something to show.
+  // ---------- A/R sample book ----------
+  // Every A/R feature has at least one real-looking example, so the demo can be tested end to end.
   const ar: ArEntry[] = []
   const DAYMS = 86_400_000
+  const post = (e: Omit<ArEntry, 'id' | 'user'> & { user?: string }): ArEntry => {
+    const x: ArEntry = { user: 'Ana R.', ...e, id: id('ar') }
+    ar.push(x)
+    return x
+  }
+  const named = (n: string) => customers.find((c) => c.name === n)!
+  const totalOf = (ro: RepairOrder, c: Customer) => roTotals(ro, settings, !!c.taxExempt).total
+  const LIMIT: Record<string, number> = { Landscape: 2500, Commercial: 1500, Farm: 3000 }
+
+  // 1. Charge accounts: commercial + tax-exempt customers bill closed work to their account.
   for (const c of customers.filter((x) => x.isBusiness || x.taxExempt)) {
     c.arType = 'Open Item'
-    c.termsDays = c.category === 'Government' ? 45 : undefined
-    const closed = ros.filter((ro) => ro.customerId === c.id && ro.status === 'closed' && ro.closedAt)
-    for (const ro of closed) {
-      const amount = roTotals(ro, settings, !!c.taxExempt).total
-      if (amount <= 0) continue
-      ar.push({ id: id('ar'), customerId: c.id, kind: 'charge', at: ro.closedAt!, amount, ref: `RO ${ro.number}`, memo: 'Repair order invoice', roId: ro.id, user: 'Ana R.' })
+    c.deliveryCode = 'P'
+    if (c.category === 'Government') c.termsDays = 45
+    if (c.category && LIMIT[c.category]) c.creditLimit = LIMIT[c.category]
+    for (const ro of ros.filter((x) => x.customerId === c.id && x.status === 'closed' && x.closedAt)) {
+      const amount = totalOf(ro, c)
+      if (amount <= 0 || ro.warranty) continue
+      post({ customerId: c.id, kind: 'charge', at: ro.closedAt!, amount, ref: `RO ${ro.number}`, memo: 'Repair order invoice', roId: ro.id })
       const age = (now - new Date(ro.closedAt!).getTime()) / DAYMS
       if (age > 40 && r() < 0.75) {
-        ar.push({ id: id('ar'), customerId: c.id, kind: 'payment', at: new Date(new Date(ro.closedAt!).getTime() + int(18, 38) * DAYMS).toISOString(),
+        post({ customerId: c.id, kind: 'payment', at: new Date(new Date(ro.closedAt!).getTime() + int(18, 38) * DAYMS).toISOString(),
           amount, ref: `Check ${int(1100, 9800)}`, memo: '', method: 'check', user: 'Ben T.' })
       }
     }
   }
-  // One account carried over from the old system, well past 90 days.
-  const late = customers.find((x) => x.category === 'Landscape')
-  if (late) {
-    late.creditLimit = 500
-    ar.push({ id: id('ar'), customerId: late.id, kind: 'charge', at: iso(128, false), amount: 642.18, ref: 'Opening balance', memo: 'Balance carried over from Infinity', user: 'Ben T.' })
-    ar.push({ id: id('ar'), customerId: late.id, kind: 'payment', at: iso(70, false), amount: 200, ref: 'Check 4471', memo: 'Partial', method: 'check', user: 'Ben T.' })
+
+  // 2. Red Dirt: carried-over balance, partly paid, over a small limit → past due + over limit warnings at write-up.
+  const red = named('Red Dirt Lawn Co.')
+  red.creditLimit = 500
+  red.notes = 'Office manager approves anything over $300. Statements go to the office.'
+  post({ customerId: red.id, kind: 'charge', at: iso(128, false), amount: 642.18, ref: 'Opening balance', memo: 'Balance carried over from Infinity', user: 'Ben T.' })
+  post({ customerId: red.id, kind: 'payment', at: iso(70, false), amount: 200, ref: 'Check 4471', memo: 'Partial', method: 'check', user: 'Ben T.' })
+
+  // 3. Balance-forward account (statements show previous balance + this period's activity).
+  const bf = named('Canadian River Mowing')
+  bf.arType = 'Balance Forward'
+  bf.deliveryCode = 'E'
+  post({ customerId: bf.id, kind: 'charge', at: iso(52, false), amount: 86.4, ref: 'Counter 3318', memo: 'Blades and belts, counter sale' })
+  post({ customerId: bf.id, kind: 'charge', at: iso(17, false), amount: 129.95, ref: 'Counter 3402', memo: 'Trimmer line, oil, filters' })
+  post({ customerId: bf.id, kind: 'payment', at: iso(9, false), amount: 150, ref: 'County warrant 22719', memo: '', method: 'check', user: 'Ben T.' })
+
+  // 4. A check the customer said was for a specific (newer) invoice — pinned, so the older one stays open.
+  for (const c of customers.filter((x) => x.isBusiness && x !== red && x !== bf)) {
+    const mine = ar.filter((e) => e.customerId === c.id && e.kind === 'charge')
+    const paidRefs = new Set(ar.filter((e) => e.customerId === c.id && e.kind === 'payment').map((e) => e.amount))
+    const unpaid = mine.filter((e) => !paidRefs.has(e.amount))
+    if (unpaid.length >= 2) {
+      const newest = unpaid[unpaid.length - 1]
+      post({ customerId: c.id, kind: 'payment', at: new Date(Math.min(now - DAYMS, new Date(newest.at).getTime() + 6 * DAYMS)).toISOString(),
+        amount: newest.amount, ref: `Check ${int(1100, 9800)}`, memo: `For ${newest.ref} per the office`, method: 'check',
+        applications: [{ chargeId: newest.id, amount: newest.amount }], user: 'Ben T.' })
+      break
+    }
+  }
+
+  // 5. Credit memo for returned parts, and a charge posted to the wrong account then voided.
+  const prairie = named('Prairie Edge Landscaping')
+  post({ customerId: prairie.id, kind: 'credit', at: iso(11, false), amount: 42.5, ref: 'Credit memo 118', memo: 'Returned unused blades (2)' })
+  post({ customerId: prairie.id, kind: 'charge', at: iso(6, false), amount: 318.75, ref: 'Counter 3455', memo: 'Hydro oil, filters',
+    voided: { at: iso(5, false), user: 'Ben T.', reason: 'Posted to the wrong account — belongs to Sooner Cut' } })
+  post({ customerId: named('Sooner Cut Lawn Care').id, kind: 'charge', at: iso(5, false), amount: 318.75, ref: 'Counter 3455', memo: 'Hydro oil, filters (moved from Prairie Edge)' })
+
+  // 6. House-charge personal accounts: one current, one past due, one that overpaid and got part of it back.
+  const personal = customers.filter((c) => !c.isBusiness && !c.taxExempt && ros.some((ro) => ro.customerId === c.id && ro.status === 'closed' && totalOf(ro, c) > 40))
+  const [h1, h2, h3] = personal
+  if (h1 && h2 && h3) {
+    for (const c of [h1, h2, h3]) { c.arType = 'Open Item'; c.deliveryCode = 'P'; c.creditLimit = 750 }
+    const firstClosed = (c: Customer) => ros.find((ro) => ro.customerId === c.id && ro.status === 'closed' && totalOf(ro, c) > 40)!
+    const r1 = firstClosed(h1), r2 = firstClosed(h2), r3 = firstClosed(h3)
+    post({ customerId: h1.id, kind: 'charge', at: iso(12, false), amount: totalOf(r1, h1), ref: `RO ${r1.number}`, memo: 'House charge', roId: r1.id })
+    post({ customerId: h2.id, kind: 'charge', at: iso(74, false), amount: totalOf(r2, h2), ref: `RO ${r2.number}`, memo: 'House charge', roId: r2.id })
+    h2.notes = 'Said he would mail a check at the end of the month. Call before more work.'
+    const c3 = totalOf(r3, h3)
+    post({ customerId: h3.id, kind: 'charge', at: iso(58, false), amount: c3, ref: `RO ${r3.number}`, memo: 'House charge', roId: r3.id })
+    post({ customerId: h3.id, kind: 'payment', at: iso(44, false), amount: round2(c3 + 40), ref: 'Check 2207', memo: 'Paid more than owed', method: 'check' })
+    post({ customerId: h3.id, kind: 'refund', at: iso(30, false), amount: 25, ref: 'Refund check 1004', memo: 'Part of the overpayment, at customer’s request', method: 'check', user: 'Ben T.' })
+  }
+
+  // 7. Deposit held on an open RO (personal) and a deposit + partial bill on a big commercial job.
+  const openRO = (pred: (c: Customer) => boolean, statuses: ROStatus[]) =>
+    ros.find((ro) => statuses.includes(ro.status) && !ro.warranty && pred(customers.find((c) => c.id === ro.customerId)!))
+  const pDep = openRO((c) => !c.isBusiness && !c.taxExempt, ['parts_on_order', 'awaiting_ok'])
+  if (pDep) {
+    const c = customers.find((x) => x.id === pDep.customerId)!
+    post({ customerId: c.id, kind: 'payment', at: new Date(new Date(pDep.openedAt).getTime() + 3_600_000).toISOString(), amount: 150,
+      ref: 'Card ••4417', memo: `Deposit on RO ${pDep.number}`, roId: pDep.id, deposit: true, method: 'card' })
+  }
+  // The biggest open commercial job gets a deposit and a progress bill.
+  const bigJob = ros.filter((ro) => ['in_progress', 'parts_on_order'].includes(ro.status) && !ro.warranty)
+    .map((ro) => ({ ro, c: customers.find((x) => x.id === ro.customerId)! }))
+    .filter(({ c }) => c.isBusiness && c !== red && c !== bf)
+    .sort((a, b) => totalOf(b.ro, b.c) - totalOf(a.ro, a.c))[0]?.ro
+  if (bigJob) {
+    const c = customers.find((x) => x.id === bigJob.customerId)!
+    const t = totalOf(bigJob, c)
+    post({ customerId: c.id, kind: 'payment', at: new Date(new Date(bigJob.openedAt).getTime() + 7_200_000).toISOString(), amount: round2(Math.max(50, t * 0.25)),
+      ref: `Check ${int(1100, 9800)}`, memo: `Deposit on RO ${bigJob.number}`, roId: bigJob.id, deposit: true, method: 'check' })
+    post({ customerId: c.id, kind: 'charge', at: new Date(Math.min(now - 3_600_000, new Date(bigJob.openedAt).getTime() + 2 * DAYMS)).toISOString(),
+      amount: round2(t * 0.4), ref: `RO ${bigJob.number}`, memo: 'Progress bill: parts ordered', roId: bigJob.id, partial: true })
   }
 
   const db: DB = {
@@ -514,8 +604,26 @@ export function makeSeed(now = Date.now()): DB {
     auditLog: [],
     notDuplicates: [],
     ar,
+    statementRuns: [],
+    arHistory: [],
   }
   ensureCashCustomer(db)
+
+  // Statement runs for the last two cycle closes, and six closed months of A/R history.
+  const today = new Date(now)
+  const close1 = lastCycleClose(settings, today)
+  const close2 = previousCycleClose(settings, close1)
+  for (const date of [close2, close1]) {
+    const ids = statementCandidates(db, date).map((st) => st.c.id)
+    const printed = Math.min(now - 3_600_000, new Date(`${date}T12:00:00`).getTime() + 2 * DAYMS)
+    db.statementRuns.unshift({ id: id('sr'), date, at: new Date(printed).toISOString(), user: 'Ben T.', customerIds: ids })
+  }
+  for (let k = 6; k >= 1; k--) {
+    const m = new Date(today.getFullYear(), today.getMonth() - k, 1)
+    const period = `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}`
+    const closedAt = new Date(Math.min(now - 3_600_000, new Date(m.getFullYear(), m.getMonth() + 1, 2, 9).getTime())).toISOString()
+    db.arHistory.push({ ...snapshotFor(db, period, 'Ben T.', closedAt), id: id('ah') })
+  }
   return db
 }
 
