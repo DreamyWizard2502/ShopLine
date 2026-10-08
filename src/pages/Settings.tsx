@@ -1,9 +1,9 @@
 import { useRef, useState } from 'react'
-import { ensureCashCustomer } from '../lib/customerSearch'
+import { buildIndex, ensureCashCustomer, findDuplicates } from '../lib/customerSearch'
 import { useStore } from '../lib/store'
-import type { DB, Staff, Line } from '../lib/types'
+import type { DB, DupSignal, DuplicateRules, Staff, Line } from '../lib/types'
 import { fmtDateTime, uid } from '../lib/calc'
-import { DB_VERSION } from '../lib/seed'
+import { DB_VERSION, defaultSettings } from '../lib/seed'
 import { download } from '../lib/importer'
 import { DraftNumber, DraftText } from '../components/fields'
 import { Modal } from '../components/ui'
@@ -68,6 +68,18 @@ export default function SettingsPage() {
             <label className="field"><span>RO stale after (days idle)</span><DraftNumber value={s.staleDays} width={120} onCommit={(v) => set((x) => { x.staleDays = Math.round(v) })} /></label>
             <label className="field"><span>Flag parts waits over (days)</span><DraftNumber value={s.partsWaitDays} width={120} onCommit={(v) => set((x) => { x.partsWaitDays = Math.round(v) })} /></label>
             <label className="field"><span>Wholegoods aged after (days)</span><DraftNumber value={s.agedUnitDays} width={120} onCommit={(v) => set((x) => { x.agedUnitDays = Math.round(v) })} /></label>
+          </div>
+        </section>
+
+        <DuplicateRulesPanel />
+
+        <section className="panel">
+          <div className="panel-head"><h2>Accounts receivable</h2></div>
+          <div className="panel-body grid3">
+            <label className="field"><span>Default terms (days until past due)</span><DraftNumber value={s.arTermsDays} width={120} onCommit={(v) => set((x) => { x.arTermsDays = Math.max(0, Math.round(v)) })} /></label>
+            <div className="small muted" style={{ gridColumn: 'span 2', alignSelf: 'end', paddingBottom: 8 }}>
+              Net days for charge accounts. A customer's own terms (on their record) override this. Aging buckets are by invoice date: Current (0–30), 31–60, 61–90, Over 90.
+            </div>
           </div>
         </section>
 
@@ -205,6 +217,7 @@ export default function SettingsPage() {
       {clearOpen && <ClearModal onClose={() => setClearOpen(false)} onBackup={exportBackup} onClear={(what) => {
         mutate((d) => {
           if (what.customers) { d.customers = []; d.units = []; d.ros = []; d.nextCustomerNumber = 1001; d.nextRONumber = 10001
+            d.ar = []; d.notDuplicates = []
             ensureCashCustomer(d)
             for (const w of d.wholegoods) { w.soldToCustomerId = null; w.customerUnitId = null } }
           if (what.wholegoods) d.wholegoods = []
@@ -266,5 +279,61 @@ function ClearModal({ onClose, onClear, onBackup }: {
       <div className="row"><button className="btn sm" onClick={onBackup}>Download a backup first</button></div>
       <label className="field"><span>Type CLEAR to confirm</span><input className="input mono" value={typed} onChange={(e) => setTyped(e.target.value.toUpperCase())} /></label>
     </Modal>
+  )
+}
+
+const SIGNAL_LABEL: Record<DupSignal, string> = { name: 'Name', phone: 'Any phone number', address: 'Street address + ZIP', email: 'Email' }
+
+/** Settings → Duplicate customers & merging. Changes apply to the look-up immediately. */
+function DuplicateRulesPanel() {
+  const { db, mutate, override, audit } = useStore()
+  const r = db.settings.dupRules
+  const set = (fn: (x: DuplicateRules) => void) => mutate((d) => { fn(d.settings.dupRules) })
+  const on = (Object.keys(r.signals) as DupSignal[]).filter((k) => r.signals[k])
+  const pairs = (() => {
+    const m = findDuplicates(buildIndex(db), r, db.notDuplicates)
+    let n = 0; for (const v of m.values()) n += v.length
+    return n / 2
+  })()
+  return (
+    <section className="panel" id="duplicates">
+      <div className="panel-head"><h2>Duplicate customers &amp; merging</h2><span className="spacer" />
+        <a className="btn sm" href="#/customers?attn=1">{pairs} possible duplicate pair{pairs === 1 ? '' : 's'} →</a></div>
+      <div className="panel-body stack">
+        <label className="check"><input type="checkbox" checked={r.enabled} onChange={(e) => set((x) => { x.enabled = e.target.checked })} /> Flag possible duplicates in the customer look-up</label>
+        <fieldset disabled={!r.enabled} className="stack" style={{ border: 0, padding: 0, margin: 0, opacity: r.enabled ? 1 : 0.55 }}>
+          <div>
+            <div className="small" style={{ fontWeight: 600, color: 'var(--ink-2)', marginBottom: 4 }}>Compare these fields</div>
+            <div className="row wrap" style={{ gap: 16 }}>
+              {(Object.keys(SIGNAL_LABEL) as DupSignal[]).map((k) => (
+                <label key={k} className="check"><input type="checkbox" checked={r.signals[k]} onChange={(e) => set((x) => { x.signals[k] = e.target.checked })} /> {SIGNAL_LABEL[k]}</label>
+              ))}
+            </div>
+          </div>
+          <div className="grid3">
+            <label className="field"><span>Flag when at least this many match</span>
+              <select className="select" value={Math.min(r.minSignals, Math.max(1, on.length))} onChange={(e) => set((x) => { x.minSignals = Number(e.target.value) })}>
+                {[1, 2, 3, 4].filter((n) => n <= Math.max(1, on.length)).map((n) => <option key={n} value={n}>{n} of the {on.length} checked</option>)}
+              </select></label>
+            <label className="field"><span>Phone digits to compare</span>
+              <select className="select" value={r.phoneDigits} onChange={(e) => set((x) => { x.phoneDigits = Number(e.target.value) as 7 | 10 })}>
+                <option value={7}>Last 7 (ignore area code)</option><option value={10}>All 10</option>
+              </select></label>
+            <label className="field"><span>Words to ignore in names</span>
+              <DraftText value={r.ignoreWords} placeholder="the, inc, llc" onCommit={(v) => set((x) => { x.ignoreWords = v })} /></label>
+          </div>
+          <label className="check"><input type="checkbox" checked={r.nameRequired} disabled={!r.signals.name} onChange={(e) => set((x) => { x.nameRequired = e.target.checked })} /> The name must be one of the matches <span className="muted small">(stops family members who share a phone from being flagged)</span></label>
+        </fieldset>
+        <div className="row wrap" style={{ gap: 12, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+          <label className="check">
+            <input type="checkbox" checked={r.mergeNeedsOverride} disabled={!override} onChange={(e) => { set((x) => { x.mergeNeedsOverride = e.target.checked }); audit(`Merging ${e.target.checked ? 'now needs' : 'no longer needs'} master override`) }} />
+            Merging customers needs master override {!override && <span className="muted small">(turn on override to change)</span>}</label>
+          <span className="spacer" />
+          <span className="small muted">{db.notDuplicates.length} pair{db.notDuplicates.length === 1 ? '' : 's'} marked “not a duplicate”</span>
+          <button className="btn sm" disabled={!db.notDuplicates.length} onClick={() => { mutate((d) => { d.notDuplicates = [] }); audit('Cleared all “not a duplicate” marks') }}>Clear marks</button>
+          <button className="btn sm" onClick={() => mutate((d) => { d.settings.dupRules = { ...defaultSettings.dupRules, mergeNeedsOverride: d.settings.dupRules.mergeNeedsOverride } })}>Restore defaults</button>
+        </div>
+      </div>
+    </section>
   )
 }

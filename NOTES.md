@@ -1,6 +1,6 @@
 # ShopLine: handoff notes
 
-Read this first. It is the state of the project as of 2026-10-08 (updated after the customer look-up build).
+Read this first. It is the state of the project as of 2026-10-08 (updated after the merge + A/R skeleton build).
 
 ## What it is
 
@@ -34,14 +34,20 @@ src/
     seed.ts          demo data + default Settings (shopFax, invoiceTerms, etc.)
     calc.ts          totals/tax math, CUSTOMER_CATEGORIES, customerPhones(c)
     importer.ts      CSV/price-file/customer import (guessMapping, planCustomers/applyCustomers, properCase)
+    customerSearch.ts  look-up index/search, duplicate rules, attention flags, Cash Customer
+    merge.ts         true customer merge (fields, phones, notes, moves history)
+    ar.ts            A/R allocation (open item, oldest first), aging, running balance
   components/
     ui.tsx fields.tsx lines.tsx   shared UI, DraftText inputs, RO line editor
     override.tsx     master-override PIN prompt
     barcode.tsx      Code 128B barcode as inline SVG (checked against python-barcode)
+    custpick.tsx     search-as-you-type customer chooser (merge, A/R)
   pages/
     Dashboard, WorkInProgress, NewRO, RODetail   repair-order flow
     PrintRO.tsx      customer-copy invoice/estimate and shop ticket (one page, print CSS)
-    Customers, CustomerDetail                    customer list and record
+    Customers, CustomerDetail                    customer look-up and record
+    MergeCustomers                               merge two customers
+    AR.tsx                                       A/R overview, account ledger, posting
     Wholegoods, Parts                            equipment and inventory (by manufacturer line)
     Import, Settings
 .github/workflows/deploy.yml   Pages deploy (build, upload dist, deploy-pages)
@@ -71,7 +77,31 @@ src/
   - A right-hand preview pane shows reach-them info, contacts, equipment with warranty, recent orders, notes and account settings. The primary button is New repair order.
   - Possible duplicates get a banner with a Merge action.
   - Arrow keys move through results.
-- **A/R decision:** Rod said that if A/R turns out to be massive, **hold it off**. Treat A/R, payments, aging and statements as Phase 3, and do not start them unprompted.
+- **A/R decision (updated 2026-10-08):** Rod asked to define the A/R scope and build its skeleton. The scope is below; the v1 skeleton is built. Statements and the rest of "Later" are still not started — ask before building them.
+- **Merge decision (2026-10-08):** Rod wants a *true* merge (not just a link) with *editable* duplicate rules. Built.
+
+## A/R scope
+
+**Model.** A per-customer ledger (`db.ar: ArEntry[]`). Every line is a `charge`, `payment` or `credit` with a positive amount; voids keep the line (crossed out, with who/when/why) and stop it counting. Customers get optional `creditLimit` and `termsDays` (blank = `Settings.arTermsDays`, default 30).
+
+**Allocation.** Open item, oldest charge first, computed on the fly in `lib/ar.ts` (`accountOf`). Nothing about allocation is stored, so it can't drift. Infinity's "Balance Forward" accounts are treated the same way for now.
+
+**Aging.** By invoice (charge) date: Current 0–30, 31–60, 61–90, Over 90. "Past due" separately means older than the customer's terms.
+
+**v1 skeleton — built:**
+- Accounts Receivable page (`/ar`): totals by bucket, past-due total, credit balances; accounts list with filters (past due, over limit, credit balance) and sorts.
+- Account page (`/ar/:customerId`): balance and aging tiles, ledger with running balance and "still open" per charge, Record payment (cash/check/card/other, shows which charges it pays), Post charge / credit (opening balances go here), Void (master override, reason required, audited).
+- Repair orders: a closed RO gets **Charge to account**. Once charged, it shows "On account $X". It turns red if the RO total changed after charging (void and re-charge for now).
+- Customer record: Charge account panel (balance, past due, credit limit, terms). Look-up preview shows balance/past due. "Needs attention" includes Past due and Over credit limit.
+- Sidebar badge = number of past-due accounts. Merges carry A/R entries to the surviving customer.
+
+**Later (not started — ask Rod first):** printed statements (and statement cycle/day), credit-limit and past-due warnings at RO write-up, applying a payment to a chosen invoice, partial-charge or deposit on open ROs, refunds, an A/R history (month-end snapshots), importing Infinity A/R balances in bulk, and Balance Forward accounts. Out of scope: finance charges, GL, card processing.
+
+## Duplicate rules & merging
+
+- Settings → **Duplicate customers & merging** (`DuplicateRules` in `types.ts`, `findDuplicates` in `customerSearch.ts`). Choose which fields are compared (name, any phone, street address + ZIP, email), how many must match, whether the name must be one of them, last 7 vs all 10 phone digits, and words ignored in names. Defaults = name + one more. Shared values used by more than 25 customers are skipped.
+- Look-up banner: **Review and merge** (defaults to keeping the record with more history) or **Not a duplicate** (stored in `db.notDuplicates`; "Clear marks" in Settings).
+- Merge screen (`/customers/merge?keep=&remove=`, also "Merge…" on any customer record): pick or swap the two records, choose field by field (only differing fields shown), see what moves. `lib/merge.ts` moves units, ROs, sold wholegoods and A/R entries, fills empty phone slots with the other's numbers (leftovers go to notes), keeps both notes and the earlier customer-since date, records `mergedFrom`, removes the old record, and writes the audit log. Searching the old number still finds the survivor. Needs master override by default (toggle in Settings, only changeable with override on).
 
 ## Current status
 
@@ -87,9 +117,9 @@ src/
   - Omnibox matches every word across name, any phone, customer # (prefix), contacts, unit make/model/serial, email and address. Non-name hits show a "Matched …" line. Ranked: exact # → name starts-with → name word → other fields, then most recent visit.
   - Chips: top 6 categories (+ "More…" select), Has open order, Tax exempt, Needs attention (credit flag, possible duplicate, no phone).
   - Preview pane: reach them (tel:/mailto: links), contacts, equipment, last 4 ROs, notes, account grid. Buttons: New repair order, New estimate (`/ro/new?status=estimate`), Open record.
-  - Duplicate banner = same normalized name AND a shared phone, address or email. It links to the other record; there is **no Merge yet** (waiting on Rod).
+  - Duplicate banner follows the Settings rules, with Review and merge / Not a duplicate (see "Duplicate rules & merging").
   - Keys: ↑/↓ move, Enter opens the record, Shift+Enter new RO, Esc clears. Search, filters and selection live in the URL, so Back restores them.
-  - Built-in Cash Customer #1000 (`isCash`), pinned above results, excluded from counts/duplicates. DB v3 migration adds it (or adopts an imported "Cash" customer already at #1000); Settings → clear customers re-adds it.
+  - Built-in Cash Customer #1000 (`isCash`), pinned above results, excluded from counts/duplicates. DB v3 migration adds it (v4 adds `dupRules`, `arTermsDays`, `notDuplicates`, `ar`) (or adopts an imported "Cash" customer already at #1000); Settings → clear customers re-adds it.
   - Demo seed now has categories, addresses, contacts, a tax-exempt church and one deliberate duplicate pair (Dwight Pruitt #2413/#2444).
 
 **Not working or unverified:**
@@ -104,17 +134,16 @@ src/
    - Customer 1069's Settings tab, to settle CreditCode.
    - Photos of the dropdown lists: Category, Priority, Location, Contact Type, Address Type, and the tax table.
    - The Customer Units tab and Edit-mode screenshots.
-   - Whether Merge Customers is in Phase 1. A/R is already settled: hold off.
+   - Which A/R "Later" items he wants next (statements are the obvious one).
 2. **Finish Phase 1 customer maintenance** (look-up and Cash Customer are done):
    - Customer record with Settings, Contacts, ShipTo and a Notes log (contacts are still just `contact1/contact2` strings; notes are one text field).
-   - Merge Customers, if Rod wants it in Phase 1.
    - A data-cleanup tool for duplicates, missing phones, bad ZIPs and ALL-CAPS names.
    - Needs new types in `types.ts` for contacts, ship-to addresses and notes, a v4 migration in `store.tsx`, and a rewrite of `CustomerDetail.tsx`. When contacts/notes become arrays, update `buildIndex` in `customerSearch.ts` so search still covers them.
    - Possibly reuse `searchCustomers` in the New RO customer picker so both searches behave the same.
 3. **Fix the CreditCode handling** (item 1 above).
 4. **Sync the PC folder** with GitHub.
 5. **Phase 2:** Open Orders and Invoice History tabs, unit fields (warranty, ESP, purchase date, color, bin, engine #, VIN, tag), an email log with `mailto`, Documents, credit-limit warnings.
-6. **Phase 3, only if Rod wants it:** A/R, payments, aging, statements and A/R History snapshots. This needs a payments model and is the part to hold off.
+6. **A/R beyond the skeleton**: see "A/R scope → Later". Ask Rod which first.
 7. **Out of scope:** GL, expense accounts, finance charges, card processing, back orders, multi-location transfers, actually sending email.
 
 ## Environment gotchas (cloud sessions)

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { HashRouter, NavLink, Route, Routes, useNavigate, Link } from 'react-router-dom'
 import { StoreProvider, useStore } from './lib/store'
 import { Icon } from './components/ui'
@@ -13,6 +13,9 @@ import Parts from './pages/Parts'
 import SettingsPage from './pages/Settings'
 import Wholegoods from './pages/Wholegoods'
 import ImportPage from './pages/Import'
+import MergeCustomers from './pages/MergeCustomers'
+import ArOverview, { ArAccount } from './pages/AR'
+import { allAccounts } from './lib/ar'
 import { OverrideHost, requestOverride } from './components/override'
 
 // Shown only on the hosted demo (GitHub Pages) so first-time visitors know what they're looking at.
@@ -33,6 +36,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   const nav = useNavigate()
   const open = db.ros.filter((r) => r.status !== 'closed').length
   const wgCount = db.wholegoods.filter((w) => w.status === 'in_stock' || w.status === 'demo').length
+  const pastDue = useMemo(() => [...allAccounts(db).values()].filter((a) => a.pastDue > 0).length, [db])
 
   // Global keyboard shortcuts — counter staff live on the keyboard.
   useEffect(() => {
@@ -67,6 +71,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         <NavLink to="/import" className="nav-link">{Icon.upload} Import Data</NavLink>
         <div className="nav-section">Records</div>
         <NavLink to="/customers" className="nav-link">{Icon.users} Customers & Units</NavLink>
+        <NavLink to="/ar" className="nav-link">{Icon.ledger} Accounts Receivable {pastDue > 0 && <span className="count" title="Accounts past due">{pastDue}</span>}</NavLink>
         <NavLink to="/settings" className="nav-link">{Icon.gear} Settings</NavLink>
         <div className="side-foot">
           <div>Working as</div>
@@ -103,7 +108,10 @@ export default function App() {
                 <Route path="/ro/:id" element={<RODetail />} />
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/customers" element={<Customers />} />
+                <Route path="/customers/merge" element={<MergeCustomers />} />
                 <Route path="/customers/:id" element={<CustomerDetail />} />
+                <Route path="/ar" element={<ArOverview />} />
+                <Route path="/ar/:id" element={<ArAccount />} />
                 <Route path="/parts" element={<Parts />} />
                 <Route path="/wholegoods" element={<Wholegoods />} />
                 <Route path="/import" element={<ImportPage />} />

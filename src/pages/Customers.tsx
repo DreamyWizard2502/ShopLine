@@ -3,9 +3,11 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useStore } from '../lib/store'
 import { CUSTOMER_CATEGORIES, fmtDate, money, roTotals } from '../lib/calc'
 import {
-  ATTENTION_LABEL, attentionOf, buildIndex, findDuplicates, searchCustomers, statementDelivery,
+  ATTENTION_LABEL, attentionOf, buildIndex, findDuplicates, pairKey, searchCustomers, statementDelivery,
   type Attention, type CustEntry, type Dup, type Hit,
 } from '../lib/customerSearch'
+import { allAccounts, type Account } from '../lib/ar'
+import { strongerFirst } from '../lib/merge'
 import { Icon, Modal, StatusBadge } from '../components/ui'
 import { formatPhone } from './NewRO'
 
@@ -19,7 +21,12 @@ export default function Customers() {
   const nav = useNavigate()
   const [params, setParams] = useSearchParams()
   // Search text lives in local state (instant typing) and is mirrored to the URL so Back restores it.
-  const [q, setQ] = useState(() => params.get('q') ?? '')
+  const [q, setQLocal] = useState(() => params.get('q') ?? '')
+  // If the URL's q changes from outside (a link, Back), follow it; ignore our own echoes while typing.
+  const pushedQ = useRef(q)
+  const urlQ = params.get('q') ?? ''
+  useEffect(() => { if (urlQ !== pushedQ.current) { pushedQ.current = urlQ; setQLocal(urlQ) } }, [urlQ])
+  const setQ = (v: string) => { pushedQ.current = v; setQLocal(v) }
   const cat = params.get('cat') ?? ''
   const fOpen = params.get('open') === '1'
   const fExempt = params.get('exempt') === '1'
@@ -41,8 +48,9 @@ export default function Customers() {
   const entries = useMemo(() => buildIndex(db), [db])
   const cash = entries.find((e) => e.c.isCash)
   const people = useMemo(() => entries.filter((e) => !e.c.isCash), [entries])
-  const dups = useMemo(() => findDuplicates(people), [people])
-  const attn = useMemo(() => new Map(people.map((e) => [e.c.id, attentionOf(e, dups)])), [people, dups])
+  const dups = useMemo(() => findDuplicates(people, db.settings.dupRules, db.notDuplicates), [people, db.settings.dupRules, db.notDuplicates])
+  const accounts = useMemo(() => allAccounts(db), [db])
+  const attn = useMemo(() => new Map(people.map((e) => [e.c.id, attentionOf(e, dups, accounts.get(e.c.id))])), [people, dups, accounts])
 
   const categories = useMemo(() => {
     const m = new Map<string, number>()
@@ -162,7 +170,7 @@ export default function Customers() {
         </section>
 
         <aside className="lk-preview panel" aria-label="Customer preview">
-          {sel ? <Preview e={sel.e} attn={attn.get(sel.e.c.id) ?? []} dups={dups.get(sel.e.c.id) ?? []} people={people} />
+          {sel ? <Preview e={sel.e} attn={attn.get(sel.e.c.id) ?? []} dups={dups.get(sel.e.c.id) ?? []} people={people} acct={accounts.get(sel.e.c.id)} />
             : <div className="empty">Select a customer to see their details.</div>}
         </aside>
       </div>
@@ -180,7 +188,7 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
 const initials = (name: string) =>
   name.split(/\s+/).filter((w) => /^[a-z0-9]/i.test(w)).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?'
 
-const ATTN_CLASS: Record<Attention, string> = { credit: 'bad', duplicate: 'warn', no_phone: 'warn' }
+const ATTN_CLASS: Record<Attention, string> = { credit: 'bad', past_due: 'bad', over_limit: 'bad', duplicate: 'warn', no_phone: 'warn' }
 
 function Pills({ c, attn }: { c: CustEntry['c']; attn: Attention[] }) {
   return (
@@ -217,8 +225,8 @@ function ResultRow({ h, on, attn, onPick, onOpen }: { h: Hit; on: boolean; attn:
   )
 }
 
-function Preview({ e, attn, dups, people }: { e: CustEntry; attn: Attention[]; dups: Dup[]; people: CustEntry[] }) {
-  const { db } = useStore()
+function Preview({ e, attn, dups, people, acct }: { e: CustEntry; attn: Attention[]; dups: Dup[]; people: CustEntry[]; acct?: Account }) {
+  const { db, mutate, audit } = useStore()
   const nav = useNavigate()
   const c = e.c
   const ros = useMemo(() => db.ros.filter((r) => r.customerId === c.id).sort((a, b) => b.openedAt.localeCompare(a.openedAt)), [db.ros, c.id])
@@ -226,7 +234,8 @@ function Preview({ e, attn, dups, people }: { e: CustEntry; attn: Attention[]; d
   const unitById = new Map(e.units.map((u) => [u.id, u]))
   const visits = (uid: string) => ros.filter((r) => r.unitId === uid).length
   const byId = (id: string) => people.find((p) => p.c.id === id)?.c
-  const acct: [string, string][] = [
+  const acctGrid: [string, string][] = [
+    ...(acct ? [['Balance', money(acct.balance)], ['Past due', acct.pastDue ? money(acct.pastDue) : 'None']] as [string, string][] : []),
     ['Tax', c.taxExempt ? 'Exempt' : 'Taxable'],
     ['Pricing', c.priceLevel ?? 'Retail'],
     ['Statements', statementDelivery(c.deliveryCode) ?? '—'],
@@ -245,7 +254,10 @@ function Preview({ e, attn, dups, people }: { e: CustEntry; attn: Attention[]; d
             <div className="mono small muted">Customer #{c.number}</div>
             <h2>{c.name}</h2>
           </div>
-          <Link className="btn" to={`/customers/${c.id}`}>Open record</Link>
+          <div className="row">
+            {acct && <Link className="btn" to={`/ar/${c.id}`}>Account</Link>}
+            <Link className="btn" to={`/customers/${c.id}`}>Open record</Link>
+          </div>
         </div>
         <div className="lk-p-pills"><Pills c={c} attn={attn.filter((a) => a !== 'duplicate')} /></div>
         <div className="lk-p-actions">
@@ -260,7 +272,13 @@ function Preview({ e, attn, dups, people }: { e: CustEntry; attn: Attention[]; d
         return (
           <div key={d.otherId} className="lk-dup">
             <div><b>Possible duplicate.</b> #{o.number} {o.name} has the {d.reason}.</div>
-            <Link className="btn sm" to={`/customers/${o.id}`}>Open #{o.number}</Link>
+            <div className="lk-dup-actions">
+              <Link className="btn sm" to={`/customers/merge?${(([k, r]) => `keep=${k}&remove=${r}`)(strongerFirst(db, c.id, o.id))}`}>Review and merge</Link>
+              <button className="btn sm ghost" onClick={() => {
+                mutate((dd) => { const k = pairKey(c.id, o.id); if (!dd.notDuplicates.includes(k)) dd.notDuplicates.push(k) })
+                audit(`Marked #${c.number} and #${o.number} as not duplicates`)
+              }}>Not a duplicate</button>
+            </div>
           </div>
         )
       })}
@@ -332,7 +350,7 @@ function Preview({ e, attn, dups, people }: { e: CustEntry; attn: Attention[]; d
         <section>
           <h3>Account</h3>
           <div className="lk-acct">
-            {acct.map(([k, v]) => <div key={k}><div className="small muted">{k}</div><div className="lk-acct-v">{v}</div></div>)}
+            {acctGrid.map(([k, v]) => <div key={k}><div className="small muted">{k}</div><div className="lk-acct-v">{v}</div></div>)}
           </div>
         </section>
       </div>

@@ -4,8 +4,9 @@ import { useStore } from '../lib/store'
 import type { UnitType } from '../lib/types'
 import { CUSTOMER_CATEGORIES, fmtDate, money, roTotals } from '../lib/calc'
 import { Modal, StatusBadge, Icon } from '../components/ui'
-import { DraftText } from '../components/fields'
+import { DraftNumber, DraftText } from '../components/fields'
 import { UnitForm, formatPhone } from './NewRO'
+import { AccountSummary } from './AR'
 
 export default function CustomerDetail() {
   const { id } = useParams()
@@ -29,8 +30,10 @@ export default function CustomerDetail() {
           <h1>{c.name}</h1>
           <CustomerChips c={c} />
           <div className="sub">Customer since {fmtDate(c.createdAt)} · {ros.length} repair orders · {money(lifetime)} lifetime</div>
+          {!!c.mergedFrom?.length && <div className="small muted">Formerly {c.mergedFrom.map((m) => `#${m.number}`).join(', ')} (merged)</div>}
         </div>
         <span className="spacer" />
+        {!c.isCash && <Link className="btn" to={`/customers/merge?keep=${c.id}`}>Merge…</Link>}
         <Link className="btn primary" to={`/ro/new?customer=${c.id}`}>{Icon.plus} New RO for this customer</Link>
       </div>
 
@@ -79,6 +82,19 @@ export default function CustomerDetail() {
         </div>
 
         <div className="stack">
+          {!c.isCash && (
+            <section className="panel">
+              <div className="panel-head"><h3>Charge account</h3></div>
+              <div className="panel-body stack">
+                <AccountSummary c={c} />
+                <div className="grid2" style={{ gap: 8 }}>
+                  <label className="field"><span>Credit limit ($, 0 = none)</span><DraftNumber value={c.creditLimit ?? 0} decimals={2} width={120} onCommit={(v) => set((x) => { x.creditLimit = v > 0 ? v : undefined })} /></label>
+                  <label className="field"><span>Terms (days, 0 = shop default)</span><DraftNumber value={c.termsDays ?? 0} width={120} onCommit={(v) => set((x) => { x.termsDays = v > 0 ? Math.round(v) : undefined })} /></label>
+                </div>
+              </div>
+            </section>
+          )}
+
           <section className="panel">
             <div className="panel-head"><h3>Contact</h3></div>
             <div className="panel-body stack">

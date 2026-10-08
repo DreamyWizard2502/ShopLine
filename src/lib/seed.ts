@@ -1,13 +1,13 @@
 // Fictional sample data so the app is useful the moment it opens.
 // All names, phone numbers and serials are made up.
 import type {
-  Customer, DB, LaborLine, Line, Part, PartLine, RepairOrder, ROStatus, Settings, Staff,
+  ArEntry, Customer, DB, LaborLine, Line, Part, PartLine, RepairOrder, ROStatus, Settings, Staff,
   TimelineEvent, Unit, UnitType, FeeLine, Approval, Wholegood, WholegoodStatus,
 } from './types'
-import { STATUS_LABEL, STATUS_ORDER, round2 } from './calc'
+import { STATUS_LABEL, STATUS_ORDER, round2, roTotals } from './calc'
 import { ensureCashCustomer } from './customerSearch'
 
-export const DB_VERSION = 3
+export const DB_VERSION = 4
 
 // Small deterministic PRNG so every reset gives the same shop.
 function mulberry32(seed: number) {
@@ -34,6 +34,16 @@ export const defaultSettings: Settings = {
   partsWaitDays: 10,
   agedUnitDays: 180,
   overridePin: '0000',
+  dupRules: {
+    enabled: true,
+    signals: { name: true, phone: true, address: true, email: true },
+    nameRequired: true,
+    minSignals: 2,
+    phoneDigits: 7,
+    ignoreWords: 'the, inc, llc, co, company, corp',
+    mergeNeedsOverride: true,
+  },
+  arTermsDays: 30,
 }
 
 export const defaultLines: Line[] = [
@@ -368,7 +378,10 @@ export function makeSeed(now = Date.now()): DB {
     // Walk the status path up to the current status, spreading timestamps.
     const path = STATUS_ORDER.slice(1, stage + 1).filter((s) => s !== 'estimate')
     let t = new Date(openedAt).getTime()
-    const endT = status === 'closed' ? new Date(openedAt).getTime() + int(2, 12) * 86_400_000 : now
+    // Closed jobs finish 2–12 days after opening, but never in the future.
+    const endT = status === 'closed'
+      ? Math.max(new Date(openedAt).getTime() + 3_600_000, Math.min(now - 3_600_000, new Date(openedAt).getTime() + int(2, 12) * 86_400_000))
+      : now
     // Most activity happens early; the last update is what drives "idle" days.
     const idleTail = status === 'closed' ? 0 : Math.min(ageDays, ageDays > 20 ? int(Math.floor(ageDays * 0.6), ageDays) : int(0, ageDays))
     const activeEnd = endT - idleTail * 86_400_000
@@ -457,6 +470,33 @@ export function makeSeed(now = Date.now()): DB {
   // Claim tags on everything still in the shop (letter + number, like the paper tags hung on units)
   ros.forEach((ro, i) => { ro.tag = `${'ABCDE'[i % 5]}${10 + ((i * 37) % 90)}` })
 
+  // A/R: commercial and tax-exempt accounts charge closed work to their account.
+  // Older charges are mostly paid; a few run late so aging has something to show.
+  const ar: ArEntry[] = []
+  const DAYMS = 86_400_000
+  for (const c of customers.filter((x) => x.isBusiness || x.taxExempt)) {
+    c.arType = 'Open Item'
+    c.termsDays = c.category === 'Government' ? 45 : undefined
+    const closed = ros.filter((ro) => ro.customerId === c.id && ro.status === 'closed' && ro.closedAt)
+    for (const ro of closed) {
+      const amount = roTotals(ro, settings, !!c.taxExempt).total
+      if (amount <= 0) continue
+      ar.push({ id: id('ar'), customerId: c.id, kind: 'charge', at: ro.closedAt!, amount, ref: `RO ${ro.number}`, memo: 'Repair order invoice', roId: ro.id, user: 'Ana R.' })
+      const age = (now - new Date(ro.closedAt!).getTime()) / DAYMS
+      if (age > 40 && r() < 0.75) {
+        ar.push({ id: id('ar'), customerId: c.id, kind: 'payment', at: new Date(new Date(ro.closedAt!).getTime() + int(18, 38) * DAYMS).toISOString(),
+          amount, ref: `Check ${int(1100, 9800)}`, memo: '', method: 'check', user: 'Ben T.' })
+      }
+    }
+  }
+  // One account carried over from the old system, well past 90 days.
+  const late = customers.find((x) => x.category === 'Landscape')
+  if (late) {
+    late.creditLimit = 500
+    ar.push({ id: id('ar'), customerId: late.id, kind: 'charge', at: iso(128, false), amount: 642.18, ref: 'Opening balance', memo: 'Balance carried over from Infinity', user: 'Ben T.' })
+    ar.push({ id: id('ar'), customerId: late.id, kind: 'payment', at: iso(70, false), amount: 200, ref: 'Check 4471', memo: 'Partial', method: 'check', user: 'Ben T.' })
+  }
+
   const db: DB = {
     version: DB_VERSION,
     settings,
@@ -472,6 +512,8 @@ export function makeSeed(now = Date.now()): DB {
     currentUserId: 's-ana',
     importLog: [],
     auditLog: [],
+    notDuplicates: [],
+    ar,
   }
   ensureCashCustomer(db)
   return db

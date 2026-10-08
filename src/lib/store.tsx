@@ -3,7 +3,7 @@
 // backend later means changing this file, not every screen.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { produce } from 'immer'
-import type { Customer, DB, Part, RepairOrder, ROStatus, TimelineEvent, Unit } from './types'
+import type { ArEntry, Customer, DB, Part, RepairOrder, ROStatus, TimelineEvent, Unit } from './types'
 import { makeSeed, DB_VERSION, defaultLines, defaultSettings } from './seed'
 import { STATUS_LABEL, uid } from './calc'
 import { idbGet, idbSet } from './idb'
@@ -38,6 +38,13 @@ function migrate(raw: DB): DB {
     // v3: built-in walk-in Cash Customer (#1000) for the customer look-up.
     ensureCashCustomer(db)
     db.version = 3
+  }
+  if (db.version < 4) {
+    // v4: duplicate rules + merging, A/R ledger.
+    db.settings = { ...defaultSettings, ...db.settings, dupRules: { ...defaultSettings.dupRules, ...(db.settings as Partial<DB['settings']>).dupRules } }
+    db.notDuplicates ??= []
+    db.ar ??= []
+    db.version = 4
   }
   return db
 }
@@ -74,6 +81,8 @@ interface StoreApi {
   // Customer helpers
   createCustomer: (c: Omit<Customer, 'id' | 'number' | 'createdAt'>) => Customer
   createUnit: (u: Omit<Unit, 'id'>) => Unit
+  // A/R
+  postAr: (e: Omit<ArEntry, 'id' | 'user'>) => ArEntry
 }
 
 const Ctx = createContext<StoreApi | null>(null)
@@ -171,6 +180,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const unit: Unit = { ...u, id: uid() }
         mutate((d) => { d.units.push(unit) })
         return unit
+      },
+      postAr: (e) => {
+        const entry: ArEntry = { ...e, id: uid(), user: currentUser + (override ? ' (override)' : '') }
+        mutate((d) => { d.ar.push(entry) })
+        return entry
       },
     }
   }, [db, mutate, override])

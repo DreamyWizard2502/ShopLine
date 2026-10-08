@@ -9,6 +9,7 @@ import {
 import { Flags, Modal, StatusBadge } from '../components/ui'
 import { DraftNumber, DraftText } from '../components/fields'
 import { normPartNo } from '../lib/importer'
+import { chargeForRO } from '../lib/ar'
 
 export default function RODetail() {
   const { id } = useParams()
@@ -35,6 +36,7 @@ export default function RODetail() {
   const closed = ro.status === 'closed'
   const locked = closed && !store.override
   const edit = (fn: (r: RepairOrder) => void) => updateRO(ro.id, fn)
+  const arCharge = chargeForRO(db, ro.id)
 
   // Pull stocked parts out of inventory when the job is closed out.
   const closeOut = () => store.mutate((d) => {
@@ -79,6 +81,19 @@ export default function RODetail() {
           <Link className="btn" to={`/ro/${ro.id}/print/ticket`}>Print shop ticket</Link>
           <Link className="btn" to={`/ro/${ro.id}/print/invoice`}>{closed ? 'Print invoice' : 'Print estimate'}</Link>
           {ro.status === 'ready' && <button className="btn primary" onClick={() => requestStatus('closed')}>Close &amp; invoice</button>}
+          {closed && !c.isCash && !arCharge && t.total > 0 && (
+            <button className="btn" onClick={() => {
+              store.postAr({ customerId: c.id, kind: 'charge', at: ro.closedAt ?? new Date().toISOString(), amount: t.total, ref: `RO ${ro.number}`, memo: 'Repair order invoice', roId: ro.id })
+              store.audit(`Charged RO ${ro.number} (${money(t.total)}) to #${c.number} ${c.name}'s account`)
+              setToast('Charged to account')
+            }}>Charge to account</button>
+          )}
+          {arCharge && (
+            <Link className={`btn ${Math.abs(arCharge.amount - t.total) > 0.004 ? 'danger' : ''}`} to={`/ar/${c.id}`}
+              title={Math.abs(arCharge.amount - t.total) > 0.004 ? 'The RO total changed after it was charged. Void the charge on the account and charge it again.' : 'View on the customer account'}>
+              On account {money(arCharge.amount)}{Math.abs(arCharge.amount - t.total) > 0.004 && ' — total changed'}
+            </Link>
+          )}
           {closed && <button className="btn" onClick={() => requestStatus('ready')}>Reopen</button>}
         </div>
       </div>

@@ -57,6 +57,49 @@ export interface Customer {
   deliveryCode?: string
   creditFlag?: boolean // Infinity "CreditCode"
   isCash?: boolean // the built-in walk-in "Cash Customer" (#1000) — pinned in look-up, never flagged
+  /** Records merged into this one. Their old numbers still find this customer. */
+  mergedFrom?: { number: number; name: string; at: string; user: string }[]
+  // A/R
+  creditLimit?: number // 0 / blank = no limit
+  termsDays?: number // blank = shop default (Settings.arTermsDays)
+}
+
+// ---------- Duplicates & merging ----------
+
+export type DupSignal = 'name' | 'phone' | 'address' | 'email'
+
+/** Editable in Settings → Duplicate customers & merging. */
+export interface DuplicateRules {
+  enabled: boolean
+  signals: Record<DupSignal, boolean> // which fields are compared
+  nameRequired: boolean // the name must be one of the matching fields
+  minSignals: number // how many compared fields must match (1–4)
+  phoneDigits: 7 | 10 // compare the last 7 (ignores area code) or all 10 digits
+  ignoreWords: string // comma list stripped from names before comparing ("inc, llc, the")
+  mergeNeedsOverride: boolean
+}
+
+// ---------- Accounts receivable ----------
+
+export type ArKind = 'charge' | 'payment' | 'credit'
+export type PayMethod = 'cash' | 'check' | 'card' | 'other'
+
+/**
+ * One line on a customer's account. Amounts are always positive;
+ * `kind` says which way it moves the balance (charge = up, payment/credit = down).
+ */
+export interface ArEntry {
+  id: string
+  customerId: string
+  kind: ArKind
+  at: string // posting date (ISO)
+  amount: number
+  ref: string // RO #, check #, "Opening balance"…
+  memo: string
+  roId?: string // set when the charge came from a closed repair order
+  method?: PayMethod // payments only
+  user: string
+  voided?: { at: string; user: string; reason: string }
 }
 
 export interface Unit {
@@ -235,6 +278,8 @@ export interface Settings {
   partsWaitDays: number // waiting on parts longer than this = flagged
   agedUnitDays: number // wholegoods on hand longer than this = flagged
   overridePin: string
+  dupRules: DuplicateRules
+  arTermsDays: number // default "net" days before a charge is past due
 }
 
 export interface DB {
@@ -252,4 +297,7 @@ export interface DB {
   currentUserId: string
   importLog: ImportLogEntry[]
   auditLog: AuditEntry[]
+  /** Customer-id pairs ("a|b", sorted) someone marked "not a duplicate". */
+  notDuplicates: string[]
+  ar: ArEntry[]
 }
